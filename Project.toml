@@ -18,7 +18,7 @@ TrajectoryGamesBase = "ac1ac542-73eb-4349-ae1b-660ab3609574"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [compat]
-BlockArrays = "0.16.43"
+BlockArrays = "0.16.43, 1"
 ChainRulesCore = "1.25.0"
 DataStructures = "0.18.20"
 FastDifferentiation = "0.4.2"
