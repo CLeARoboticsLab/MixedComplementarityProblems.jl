@@ -21,14 +21,14 @@ function solve(
     θ::AbstractVector{<:Real};
     x₀ = zeros(mcp.unconstrained_dimension),
     y₀ = ones(mcp.constrained_dimension),
+    s₀ = ones(mcp.constrained_dimension),
     tol = 1e-4,
     max_inner_iters = 20,
-    max_outer_iters = 50
+    max_outer_iters = 50,
 )
     x = x₀
     y = y₀
-    s = ones(length(y))
-
+    s = s₀
     ϵ = 1.0
     kkt_error = Inf
     status = :solved
@@ -76,7 +76,7 @@ function solve(
         status = :failed
     end
 
-    (; status, x, y, s, kkt_error, ϵ)
+    (; status, x, y, s, kkt_error, ϵ, outer_iters)
 end
 
 """Helper function to compute the step size `α` which solves:
