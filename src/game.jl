@@ -74,7 +74,8 @@ function ParametricGame(;
     end
 
     # Build MCP representation.
-    F = Vector{Symbolics.Num}(
+    symbolic_type = eltype(x)
+    F = Vector{symbolic_type}(
         filter!(
             !isnothing,
             [
@@ -87,7 +88,7 @@ function ParametricGame(;
         ),
     )
 
-    z = Vector{Symbolics.Num}(
+    z = Vector{symbolic_type}(
         filter!(
             !isnothing,
             [

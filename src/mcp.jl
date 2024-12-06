@@ -60,10 +60,16 @@ function PrimalDualMCP(
     y_symbolic::Vector{T},
     θ_symbolic::Vector{T};
     compute_sensitivities = false,
-    backend = SymbolicUtils.SymbolicsBackend(),
     backend_options = (;),
 ) where {T<:Union{FD.Node,Symbolics.Num}}
     # Create symbolic slack variable `s` and parameter `ϵ`.
+    if T == FD.Node
+        backend = SymbolicUtils.FastDifferentiationBackend()
+    else
+        @assert T === Symbolics.Num
+        backend = SymbolicUtils.SymbolicsBackend()
+    end
+
     s_symbolic = SymbolicUtils.make_variables(backend, :s, length(y_symbolic))
     ϵ_symbolic = only(SymbolicUtils.make_variables(backend, :ϵ, 1))
     z_symbolic = [x_symbolic; y_symbolic; s_symbolic]
