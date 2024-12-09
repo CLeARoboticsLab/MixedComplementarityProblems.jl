@@ -26,6 +26,16 @@ function solve(
     max_inner_iters = 20,
     max_outer_iters = 50,
 )
+    # Set up common memory.
+    ∇F = get_result_buffer(mcp.∇F_z!)
+    F = zeros(mcp.unconstrained_dimension + 2mcp.constrained_dimension)
+    δz = zeros(mcp.unconstrained_dimension + 2mcp.constrained_dimension)
+    δx = @view δz[1:(mcp.unconstrained_dimension)]
+    δy =
+        @view δz[(mcp.unconstrained_dimension + 1):(mcp.unconstrained_dimension + mcp.constrained_dimension)]
+    δs = @view δz[(mcp.unconstrained_dimension + mcp.constrained_dimension + 1):end]
+
+    # Main solver loop.
     x = x₀
     y = y₀
     s = s₀
@@ -40,16 +50,15 @@ function solve(
         while kkt_error > ϵ && inner_iters < max_inner_iters
             # Compute the Newton step.
             # TODO! Can add some adaptive regularization.
-            F = mcp.F(x, y, s; θ, ϵ)
-            δz = -mcp.∇F_z(x, y, s; θ, ϵ) \ F
+            mcp.F!(F, x, y, s; θ, ϵ)
+            mcp.∇F_z!(∇F, x, y, s; θ, ϵ)
+            LinearAlgebra.ldiv!(
+                δz,
+                LinearAlgebra.qr(-collect(∇F), LinearAlgebra.ColumnNorm()),
+                collect(F),
+            )
 
             # Fraction to the boundary linesearch.
-            δx = @view δz[1:(mcp.unconstrained_dimension)]
-            δy =
-                @view δz[(mcp.unconstrained_dimension + 1):(mcp.unconstrained_dimension + mcp.constrained_dimension)]
-            δs =
-                @view δz[(mcp.unconstrained_dimension + mcp.constrained_dimension + 1):end]
-
             α_s = fraction_to_the_boundary_linesearch(s, δs; tol)
             α_y = fraction_to_the_boundary_linesearch(y, δy; tol)
 

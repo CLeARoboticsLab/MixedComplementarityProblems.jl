@@ -11,12 +11,12 @@ for some ϵ > 0. Define the function `F(x, y, s; θ, ϵ)` to return the left
 hand side of this system of equations.
 """
 struct PrimalDualMCP{T1,T2,T3}
-    "A callable `F(x, y, s; θ, ϵ)` which computes the KKT error in the primal-dual system."
-    F::T1
-    "A callable `∇F_z(x, y, s; θ, ϵ)` which stores the Jacobian of the KKT error wrt z."
-    ∇F_z::T2
-    "A callable `∇F_θ(x, y, s; θ, ϵ)` which stores the Jacobian of the KKT error wrt θ."
-    ∇F_θ::T3
+    "A callable `F!(result, x, y, s; θ, ϵ)` which computes the KKT error in-place."
+    F!::T1
+    "A callable `∇F_z!(result, x, y, s; θ, ϵ)` to compute ∇F wrt z in-place."
+    ∇F_z!::T2
+    "A callable `∇F_θ!(result, x, y, s; θ, ϵ)` to compute ∇F wrt θ in-place."
+    ∇F_θ!::T3
     "Dimension of unconstrained variable."
     unconstrained_dimension::Int
     "Dimension of constrained variable."
@@ -79,44 +79,60 @@ function PrimalDualMCP(
         s_symbolic .* y_symbolic .- ϵ_symbolic
     ]
 
-    F = let
-        _F = SymbolicUtils.build_function(
+    F! = let
+        _F! = SymbolicUtils.build_function(
             F_symbolic,
             [z_symbolic; θ_symbolic; ϵ_symbolic];
-            in_place = false,
+            in_place = true,
             backend_options,
         )
 
-        (x, y, s; θ, ϵ) -> _F([x; y; s; θ; ϵ])
+        (result, x, y, s; θ, ϵ) -> _F!(result, [x; y; s; θ; ϵ])
     end
 
-    ∇F_z = let
+    ∇F_z! = let
         ∇F_symbolic = SymbolicUtils.sparse_jacobian(F_symbolic, z_symbolic)
-        _∇F = SymbolicUtils.build_function(
+        _∇F! = SymbolicUtils.build_function(
             ∇F_symbolic,
             [z_symbolic; θ_symbolic; ϵ_symbolic];
-            in_place = false,
+            in_place = true,
             backend_options,
         )
 
-        (x, y, s; θ, ϵ) -> _∇F([x; y; s; θ; ϵ])
+        rows, cols, _ = SparseArrays.findnz(∇F_symbolic)
+        constant_entries = get_constant_entries(∇F_symbolic, z_symbolic)
+        SparseFunction(
+            (result, x, y, s; θ, ϵ) -> _∇F!(result, [x; y; s; θ; ϵ]),
+            rows,
+            cols,
+            size(∇F_symbolic),
+            constant_entries,
+        )
     end
 
-    ∇F_θ =
+    ∇F_θ! =
         !compute_sensitivities ? nothing :
         let
             ∇F_symbolic = SymbolicUtils.sparse_jacobian(F_symbolic, θ_symbolic)
-            _∇F = SymbolicUtils.build_function(
+            _∇F! = SymbolicUtils.build_function(
                 ∇F_symbolic,
                 [z_symbolic; θ_symbolic; ϵ_symbolic];
-                in_place = false,
+                in_place = true,
                 backend_options,
             )
 
-            (x, y, s; θ, ϵ) -> _∇F([x; y; s; θ; ϵ])
+            rows, cols, _ = SparseArrays.findnz(∇F_symbolic)
+            constant_entries = get_constant_entries(∇F_symbolic, θ_symbolic)
+            SparseFunction(
+                (result, x, y, s; θ, ϵ) -> _∇F!(result, [x; y; s; θ; ϵ]),
+                rows,
+                cols,
+                size(∇F_symbolic),
+                constant_entries,
+            )
         end
 
-    PrimalDualMCP(F, ∇F_z, ∇F_θ, length(x_symbolic), length(y_symbolic))
+    PrimalDualMCP(F!, ∇F_z!, ∇F_θ!, length(x_symbolic), length(y_symbolic))
 end
 
 """ Construct a PrimalDualMCP from `K(z; θ) ⟂ z̲ ≤ z ≤ z̅`, where `K` is callable.

@@ -15,18 +15,27 @@ using ForwardDiff: ForwardDiff
 using LinearAlgebra: LinearAlgebra
 
 function _solve_jacobian_θ(mcp::MixedComplementarityProblems.PrimalDualMCP, solution, θ)
-    !isnothing(mcp.∇F_θ) || throw(
+    !isnothing(mcp.∇F_θ!) || throw(
         ArgumentError(
             "Missing sensitivities. Set `compute_sensitivities = true` when constructing the PrimalDualMCP.",
         ),
     )
 
     (; x, y, s, ϵ) = solution
-    ∂z∂θ =
-        LinearAlgebra.qr(-collect(mcp.∇F_z(x, y, s; θ, ϵ)), LinearAlgebra.ColumnNorm()) \
-        collect(mcp.∇F_θ(x, y, s; θ, ϵ))
 
-    ∂z∂θ
+    ∇F_z = let
+        ∇F = MixedComplementarityProblems.get_result_buffer(mcp.∇F_z!)
+        mcp.∇F_z!(∇F, x, y, s; θ, ϵ)
+        ∇F
+    end
+
+    ∇F_θ = let
+        ∇F = MixedComplementarityProblems.get_result_buffer(mcp.∇F_θ!)
+        mcp.∇F_θ!(∇F, x, y, s; θ, ϵ)
+        ∇F
+    end
+
+    LinearAlgebra.qr(-collect(∇F_z), LinearAlgebra.ColumnNorm()) \ collect(∇F_θ)
 end
 
 function ChainRulesCore.rrule(
@@ -54,10 +63,14 @@ function ChainRulesCore.rrule(
 
             @views project_to_θ(
                 ∂z∂θ[1:(mcp.unconstrained_dimension), :]' * ∂l∂x +
-                ∂z∂θ[(mcp.unconstrained_dimension + 1):(mcp.unconstrained_dimension + mcp.constrained_dimension), :]' *
-                ∂l∂y +
-                ∂z∂θ[(mcp.unconstrained_dimension + mcp.constrained_dimension + 1):end, :]' *
-                ∂l∂s,
+                ∂z∂θ[
+                    (mcp.unconstrained_dimension + 1):(mcp.unconstrained_dimension + mcp.constrained_dimension),
+                    :,
+                ]' * ∂l∂y +
+                ∂z∂θ[
+                    (mcp.unconstrained_dimension + mcp.constrained_dimension + 1):end,
+                    :,
+                ]' * ∂l∂s,
             )
         end
 
