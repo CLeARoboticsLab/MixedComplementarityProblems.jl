@@ -49,7 +49,7 @@ function solve(
     linear_solve_algorithm = KrylovJL_GMRES(),
 )
     # Set up common memory.
-    ∇F = mcp.∇F_z!.result_buffer
+    # ∇F = mcp.∇F_z!.result_buffer
     F = zeros(mcp.unconstrained_dimension + 2mcp.constrained_dimension)
     δz = zeros(mcp.unconstrained_dimension + 2mcp.constrained_dimension)
     δx = @view δz[1:(mcp.unconstrained_dimension)]
@@ -57,7 +57,8 @@ function solve(
         @view δz[(mcp.unconstrained_dimension + 1):(mcp.unconstrained_dimension + mcp.constrained_dimension)]
     δs = @view δz[(mcp.unconstrained_dimension + mcp.constrained_dimension + 1):end]
 
-    linsolve = init(LinearProblem(∇F, δz), linear_solve_algorithm)
+    # TODO: this should be cached in the solver; no need to allocate new solver memory every time.
+    linsolve = init(LinearProblem(mcp.∇F_z! + tol * I, δz), linear_solve_algorithm)
 
     # Main solver loop.
     x = x₀
@@ -75,12 +76,12 @@ function solve(
             # Compute the Newton step.
             # TODO: Can add some adaptive regularization.
             # TODO: use a linear operator with a lazy gradient computation here.
-            mcp.F!(F, x, y, s; θ, ϵ)
-            mcp.∇F_z!(∇F, x, y, s; θ, ϵ)
-            linsolve.A = ∇F + tol * I
+            mcp.F!(F, x, y, s, θ, ϵ)
+            mcp.∇F_z!.p = [x; y; s; θ; ϵ]
+            linsolve.A = mcp.∇F_z! + tol * I
             linsolve.b = -F
             solution = solve!(linsolve)
-            if !SciMLBase.successful_retcode(solution)
+            if !successful_retcode(solution)
                 verbose && @warn "Linear solve failed. Exiting prematurely."
                 status = :failed
                 break

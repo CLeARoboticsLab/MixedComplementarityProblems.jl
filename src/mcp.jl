@@ -90,33 +90,37 @@ function PrimalDualMCP(
             in_place = true,
             backend_options,
         )
-
-        (result, x, y, s; θ, ϵ) -> _F!(result, x, y, s, θ, ϵ)
     end
 
     ∇F_z! = let
         ∇F_symbolic = SymbolicTracingUtils.sparse_jacobian(F_symbolic, z_symbolic)
-        _∇F! = SymbolicTracingUtils.build_function(
+        _∇F! = SymbolicTracingUtils.build_linear_operator(
             ∇F_symbolic,
-            x_symbolic,
-            y_symbolic,
-            s_symbolic,
-            θ_symbolic,
-            ϵ_symbolic;
+            [x_symbolic; y_symbolic; s_symbolic; θ_symbolic; ϵ_symbolic];
             in_place = true,
-            backend_options,
         )
 
-        rows, cols, _ = SparseArrays.findnz(∇F_symbolic)
-        constant_entries =
-            SymbolicTracingUtils.get_constant_entries(∇F_symbolic, z_symbolic)
-        SymbolicTracingUtils.SparseFunction(
-            (result, x, y, s; θ, ϵ) -> _∇F!(result, x, y, s, θ, ϵ),
-            rows,
-            cols,
-            size(∇F_symbolic),
-            constant_entries,
-        )
+        # _∇F! = SymbolicTracingUtils.build_function(
+        #     ∇F_symbolic,
+        #     x_symbolic,
+        #     y_symbolic,
+        #     s_symbolic,
+        #     θ_symbolic,
+        #     ϵ_symbolic;
+        #     in_place = true,
+        #     backend_options,
+        # )
+        #
+        # rows, cols, _ = SparseArrays.findnz(∇F_symbolic)
+        # constant_entries =
+        #     SymbolicTracingUtils.get_constant_entries(∇F_symbolic, z_symbolic)
+        # SymbolicTracingUtils.SparseFunction(
+        #     (result, x, y, s; θ, ϵ) -> _∇F!(result, x, y, s, θ, ϵ),
+        #     rows,
+        #     cols,
+        #     size(∇F_symbolic),
+        #     constant_entries,
+        # )
     end
 
     ∇F_θ! =

@@ -6,7 +6,7 @@ using BlockArrays: blocks, blocksizes
 using TrajectoryGamesBase: to_blockvector
 using SymbolicTracingUtils: SymbolicTracingUtils as SymbolicTracingUtils
 using LinearSolve: LinearProblem, init, solve!, KrylovJL_GMRES
-using SciMLBase: SciMLBase
+using SciMLBase: successful_retcode
 
 include("mcp.jl")
 include("solver.jl")

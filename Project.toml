@@ -31,3 +31,6 @@ SymbolicTracingUtils = "0.1.1"
 TrajectoryGamesBase = "0.3.10"
 Zygote = "0.6.73"
 julia = "1.11"
+
+[sources]
+SymbolicTracingUtils = { rev = "main" }
