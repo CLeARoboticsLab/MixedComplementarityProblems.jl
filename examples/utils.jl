@@ -55,6 +55,40 @@ function build_parametric_game(;
     horizon = 10,
     params_per_player = 0, # not including initial state, which is always a param
 )
+    (;
+        K_symbolic,
+        z_symbolic,
+        θ_symbolic,
+        lower_bounds,
+        upper_bounds,
+        dims,
+        problems,
+        shared_equality,
+        shared_inequality,
+    ) = build_mcp_components(; game, horizon, params_per_player)
+
+    mcp = MixedComplementarityProblems.PrimalDualMCP(
+        K_symbolic,
+        z_symbolic,
+        θ_symbolic,
+        lower_bounds,
+        upper_bounds,
+    )
+    MixedComplementarityProblems.ParametricGame(
+        problems,
+        shared_equality,
+        shared_inequality,
+        dims,
+        mcp,
+    )
+end
+
+"Construct MCP components from game components."
+function build_mcp_components(;
+    game::TrajectoryGame,
+    horizon = 10,
+    params_per_player = 0, # not including initial state, which is always a param
+)
     N = 2
     N == num_players(game) || error("Should have only two players.")
 
@@ -125,15 +159,22 @@ function build_parametric_game(;
         ii in 1:N
     ]
 
-    MixedComplementarityProblems.ParametricGame(;
+    problems = map(
+        f -> MixedComplementarityProblems.OptimizationProblem(; objective = f),
+        objectives,
+    )
+
+    components = MixedComplementarityProblems.game_to_mcp(;
         test_point = BlockArray(zeros(sum(primal_dims)), primal_dims),
         test_parameter = mortar([
             zeros(state_dim(game.dynamics, ii) + params_per_player) for ii in 1:N
         ]),
-        problems = map(f -> MixedComplementarityProblems.OptimizationProblem(; objective = f), objectives),
+        problems,
         shared_equality,
         shared_inequality,
     )
+
+    (; problems, shared_equality, shared_inequality, components...)
 end
 
 "Generate an initial guess for primal variables following a zero input sequence."
@@ -229,19 +270,4 @@ function (strategy::WarmStartRecedingHorizonStrategy)(state, time)
     end
 
     strategy.receding_horizon_strategy(state, time_along_plan)
-end
-
-"Visualize a strategy `γ` on a makie canvas using the base color `color`."
-function TrajectoryGamesBase.visualize!(
-    canvas,
-    γ::Makie.Observable{<:OpenLoopStrategy};
-    color = :black,
-    weight_offset = 0.0,
-)
-    Makie.series!(canvas, γ; color = [(color, min(1.0, 0.9 + weight_offset))])
-end
-
-function Makie.convert_arguments(::Type{<:Makie.Series}, γ::OpenLoopStrategy)
-    traj_points = map(s -> Makie.Point2f(s[1:2]), γ.xs)
-    ([traj_points],)
 end

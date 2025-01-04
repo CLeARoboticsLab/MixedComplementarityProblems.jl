@@ -1,113 +1,66 @@
-""" Generate a random large (convex) quadratic problem of the form
-                               min_x 0.5 xᵀ M x - ϕᵀ x
-                               s.t.  Ax - b ≥ 0.
-
-NOTE: the problem may not be feasible!
-"""
-function generate_test_problem(; num_primals, num_inequalities)
-    G(x, y; θ) =
-        let
-            (; M, A, ϕ) = unpack_parameters(θ; num_primals, num_inequalities)
-            M * x - ϕ - A' * y
-        end
-
-    H(x, y; θ) =
-        let
-            (; A, b) = unpack_parameters(θ; num_primals, num_inequalities)
-            A * x - b
-        end
-
-    K(z, θ) =
-        let
-            x = z[1:num_primals]
-            y = z[(num_primals + 1):end]
-
-            [G(x, y; θ); H(x, y; θ)]
-        end
-
-    (; G, H, K)
-end
-
-"Generate a random parameter vector Θ corresponding to a convex QP."
-function generate_random_parameter(rng; num_primals, num_inequalities, sparsity_rate)
-    bernoulli = Distributions.Bernoulli(1 - sparsity_rate)
-
-    M = let
-        P =
-            randn(rng, num_primals, num_primals) .*
-            rand(rng, bernoulli, num_primals, num_primals)
-        P' * P
-    end
-
-    A =
-        randn(rng, num_inequalities, num_primals) .*
-        rand(rng, bernoulli, num_inequalities, num_primals)
-    b = randn(rng, num_inequalities)
-    ϕ = randn(rng, num_primals)
-
-    [reshape(M, length(M)); reshape(A, length(A)); b; ϕ]
-end
-
-"Unpack a parameter vector θ into the components of a convex QP."
-function unpack_parameters(θ; num_primals, num_inequalities)
-    M = reshape(θ[1:(num_primals^2)], num_primals, num_primals)
-    A = reshape(
-        θ[(num_primals^2 + 1):(num_primals^2 + num_inequalities * num_primals)],
-        num_inequalities,
-        num_primals,
-    )
-
-    b =
-        θ[(num_primals^2 + num_inequalities * num_primals + 1):(num_primals^2 + num_inequalities * (num_primals + 1))]
-    ϕ = θ[(num_primals^2 + num_inequalities * (num_primals + 1) + 1):end]
-
-    (; M, A, b, ϕ)
-end
-
-"Benchmark interior point solver against PATH on a bunch of random QPs."
-function benchmark(;
-    num_samples = 1000,
-    num_primals = 100,
-    num_inequalities = 100,
-    sparsity_rate = 0.9,
+"Benchmark interior point solver against PATH on a bunch of random test problems."
+function benchmark(
+    benchmark_type;
+    num_samples = 100,
+    problem_kwargs = (;),
     ip_mcp = nothing,
     path_mcp = nothing,
     ip_kwargs = (; tol = 1e-6),
 )
-    rng = Random.MersenneTwister(1)
-
     # Generate problem and random parameters.
     @info "Generating random problems..."
-    problem = generate_test_problem(; num_primals, num_inequalities)
+    problem = generate_test_problem(benchmark_type; problem_kwargs...)
 
+    rng = Random.MersenneTwister(1)
     θs = map(1:num_samples) do _
-        generate_random_parameter(rng; num_primals, num_inequalities, sparsity_rate)
+        generate_random_parameter(benchmark_type; rng, problem_kwargs...)
     end
 
     # Generate corresponding MCPs.
     @info "Generating IP MCP..."
     parameter_dimension = length(first(θs))
-    ip_mcp =
-        !isnothing(ip_mcp) ? ip_mcp :
+    ip_mcp = if !isnothing(ip_mcp)
+        ip_mcp
+    elseif hasproperty(problem, :K)
+        # Generated a callable problem.
         MixedComplementarityProblems.PrimalDualMCP(
-            problem.G,
-            problem.H;
-            unconstrained_dimension = num_primals,
-            constrained_dimension = num_inequalities,
+            problem.K,
+            problem.lower_bounds,
+            problem.upper_bounds;
             parameter_dimension,
         )
+    else
+        # Generated a symbolic problem.
+        MixedComplementarityProblems.PrimalDualMCP(
+            problem.K_symbolic,
+            problem.z_symbolic,
+            problem.θ_symbolic,
+            problem.lower_bounds,
+            problem.upper_bounds,
+        )
+    end
 
     @info "Generating PATH MCP..."
-    lower_bounds = [fill(-Inf, num_primals); fill(0, num_inequalities)]
-    upper_bounds = fill(Inf, num_primals + num_inequalities)
-    path_mcp =
-        !isnothing(path_mcp) ? path_mcp :
+    path_mcp = if !isnothing(path_mcp)
+        path_mcp
+    elseif hasproperty(problem, :K)
+        # Generated a callable problem.
         ParametricMCPs.ParametricMCP(
             problem.K,
-            lower_bounds,
-            upper_bounds,
+            problem.lower_bounds,
+            problem.upper_bounds,
             parameter_dimension,
         )
+    else
+        # Generated a symbolic problem.
+        ParametricMCPs.ParametricMCP(
+            problem.K_symbolic,
+            problem.z_symbolic,
+            problem.θ_symbolic,
+            problem.lower_bounds,
+            problem.upper_bounds
+        )
+    end
 
     # Warm up the solvers.
     @info "Warming up IP solver..."
@@ -127,7 +80,7 @@ function benchmark(;
             MixedComplementarityProblems.InteriorPoint(),
             ip_mcp,
             θ;
-            ip_kwargs...
+            ip_kwargs...,
         )
 
         (; elapsed_time, success = sol.status == :solved)
@@ -150,7 +103,8 @@ function summary_statistics(data)
         (; success_rate = fraction_solved(solver_data), runtime_stats(solver_data)...)
     end
 
-    stats = (; ip = accumulate_stats(data.ip_data), path = accumulate_stats(data.path_data))
+    stats =
+        (; ip = accumulate_stats(data.ip_data), path = accumulate_stats(data.path_data))
     @info "IP runtime is $(100(stats.ip.μ / stats.path.μ)) % that of PATH."
 
     stats

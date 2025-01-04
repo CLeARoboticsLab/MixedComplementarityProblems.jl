@@ -30,6 +30,27 @@ function ParametricGame(;
     shared_equality = nothing,
     shared_inequality = nothing,
 )
+    (; K_symbolic, z_symbolic, θ_symbolic, lower_bounds, upper_bounds, dims) =
+        game_to_mcp(;
+            test_point,
+            test_parameter,
+            problems,
+            shared_equality,
+            shared_inequality,
+        )
+
+    mcp = PrimalDualMCP(K_symbolic, z_symbolic, θ_symbolic, lower_bounds, upper_bounds)
+    ParametricGame(problems, shared_equality, shared_inequality, dims, mcp)
+end
+
+"Helper for converting game components to MCP components."
+function game_to_mcp(;
+    test_point,
+    test_parameter,
+    problems,
+    shared_equality = nothing,
+    shared_inequality = nothing,
+)
     N = length(problems)
     @assert N == length(blocks(test_point))
 
@@ -83,7 +104,7 @@ function ParametricGame(;
 
     # Build MCP representation.
     symbolic_type = eltype(x)
-    F = Vector{symbolic_type}(
+    K = Vector{symbolic_type}(
         filter!(
             !isnothing,
             [
@@ -109,7 +130,7 @@ function ParametricGame(;
         ),
     )
 
-    z̲ = [
+    lower_bounds = [
         fill(-Inf, length(x))
         fill(-Inf, length(λ))
         fill(-Inf, length(λ̃))
@@ -117,7 +138,7 @@ function ParametricGame(;
         fill(0, length(μ̃))
     ]
 
-    z̅ = [
+    upper_bounds = [
         fill(Inf, length(x))
         fill(Inf, length(λ))
         fill(Inf, length(λ̃))
@@ -125,9 +146,14 @@ function ParametricGame(;
         fill(Inf, length(μ̃))
     ]
 
-    mcp = PrimalDualMCP(F |> collect, z |> collect, θ |> collect, z̲, z̅)
-
-    ParametricGame(problems, shared_equality, shared_inequality, dims, mcp)
+    (;
+        K_symbolic = collect(K),
+        z_symbolic = collect(z),
+        θ_symbolic = collect(θ),
+        lower_bounds,
+        upper_bounds,
+        dims,
+    )
 end
 
 function dimensions(
