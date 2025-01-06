@@ -31,7 +31,7 @@ using FiniteDiff: FiniteDiff
         @test all(abs.(G(sol.x, sol.y; θ)) .≤ 5e-3)
         @test all(H(sol.x, sol.y; θ) .≥ 0)
         @test all(sol.y .≥ 0)
-        @test sum(sol.y .* H(sol.x, sol.y; θ)) ≤ 5e-3
+        @test all(sol.y .* H(sol.x, sol.y; θ) .≤ 5e-3)
         @test all(sol.s .≤ 5e-3)
         @test sol.kkt_error ≤ 5e-3
         @test sol.status == :solved
