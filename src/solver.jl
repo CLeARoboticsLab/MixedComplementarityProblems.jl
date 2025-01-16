@@ -18,11 +18,12 @@ when the previous subproblem is solved in fewer iterations.
 Positional arguments:
     - `mcp::PrimalDualMCP`: the mixed complementarity problem to solve.
     - `θ::AbstractVector{<:Real}`: the parameter vector.
+
+Keyword arguments:
     - `x₀::AbstractVector{<:Real}`: the initial primal variable.
     - `y₀::AbstractVector{<:Real}`: the initial dual variable.
     - `s₀::AbstractVector{<:Real}`: the initial slack variable.
-
-Keyword arguments:
+    - `ϵ₀::Real`: the initial relaxation scale.
     - `tol::Real = 1e-4`: the tolerance for the KKT error.
     - `max_inner_iters::Int = 20`: the maximum number of inner iterations.
     - `max_outer_iters::Int = 50`: the maximum number of outer iterations.
@@ -39,6 +40,7 @@ function solve(
     x₀ = zeros(mcp.unconstrained_dimension),
     y₀ = ones(mcp.constrained_dimension),
     s₀ = ones(mcp.constrained_dimension),
+    ϵ₀ = 1.0,
     tol = 1e-4,
     max_inner_iters = 20,
     max_outer_iters = 50,
@@ -63,7 +65,7 @@ function solve(
     x = x₀
     y = y₀
     s = s₀
-    ϵ = 1.0
+    ϵ = ϵ₀
     kkt_error = Inf
     status = :solved
     outer_iters = 1
