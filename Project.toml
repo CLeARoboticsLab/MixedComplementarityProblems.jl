@@ -1,7 +1,7 @@
 name = "MixedComplementarityProblems"
 uuid = "6c9e26cb-9263-41b8-a6c6-f4ca104ccdcd"
 authors = ["David Fridovich-Keil <dfk@utexas.edu>"]
-version = "0.1.9"
+version = "0.1.10"
 
 [deps]
 BlockArrays = "8e7c35d0-a365-5155-bbbb-fb81a777f24e"
