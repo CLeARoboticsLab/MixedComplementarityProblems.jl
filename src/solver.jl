@@ -37,11 +37,11 @@ function solve(
     ::InteriorPoint,
     mcp::PrimalDualMCP,
     θ::AbstractVector{<:Real};
-    x₀ = zeros(mcp.unconstrained_dimension),
-    y₀ = ones(mcp.constrained_dimension),
-    s₀ = ones(mcp.constrained_dimension),
-    ϵ₀ = 1.0,
+    x₀ = nothing,
+    y₀ = nothing,
+    s₀ = nothing,
     tol = 1e-4,
+    ϵ₀ = :auto,
     max_inner_iters = 20,
     max_outer_iters = 50,
     tightening_rate = 0.1,
@@ -62,18 +62,32 @@ function solve(
     linsolve = init(LinearProblem(∇F, δz), linear_solve_algorithm)
 
     # Main solver loop.
-    x = x₀
-    y = y₀
-    s = s₀
-    ϵ = ϵ₀
-    kkt_error = Inf
+    x = @something(x₀, zeros(mcp.unconstrained_dimension))
+    y = @something(y₀, ones(mcp.constrained_dimension))
+    s = @something(s₀, ones(mcp.constrained_dimension))
+
+    if ϵ₀ === :auto
+        is_warmstarted = !isnothing(x₀) && !isnothing(y₀) && !isnothing(s₀)
+        if is_warmstarted
+            ϵ = tol
+        else
+            ϵ = one(tol)
+        end
+    else
+        ϵ = ϵ₀
+    end
+
     status = :solved
+    total_iters = 0
+    inner_iters = 1
     outer_iters = 1
-    while kkt_error > tol && ϵ > tol && outer_iters < max_outer_iters
+    kkt_error = Inf
+    while outer_iters < max_outer_iters || iszero(total_iters)
         inner_iters = 1
         status = :solved
 
         while kkt_error > ϵ && inner_iters < max_inner_iters
+            total_iters += 1
             # Compute the Newton step.
             # TODO: Can add some adaptive regularization.
             # TODO: use a linear operator with a lazy gradient computation here.
@@ -82,8 +96,10 @@ function solve(
             linsolve.A = ∇F + tol * I
             linsolve.b = -F
             solution = solve!(linsolve)
-            if !SciMLBase.successful_retcode(solution) && (solution.retcode !== SciMLBase.ReturnCode.Default)
-                verbose && @warn "Linear solve failed. Exiting prematurely. Return code: $(solution.retcode)"
+            if !SciMLBase.successful_retcode(solution) &&
+               (solution.retcode !== SciMLBase.ReturnCode.Default)
+                verbose &&
+                    @warn "Linear solve failed. Exiting prematurely. Return code: $(solution.retcode)"
                 status = :failed
                 break
             end
@@ -109,9 +125,16 @@ function solve(
             inner_iters += 1
         end
 
-        ϵ *=
-            (status === :solved) ? 1 - exp(-tightening_rate * inner_iters) :
+        if kkt_error <= ϵ <= tol
+            break
+        end
+
+        ϵ *= if status === :solved
+            1 - exp(-tightening_rate * inner_iters)
+        else
             1 + exp(-loosening_rate * inner_iters)
+        end
+        ϵ = min(ϵ, one(ϵ))
         outer_iters += 1
     end
 
@@ -119,7 +142,7 @@ function solve(
         status = :failed
     end
 
-    (; status, x, y, s, kkt_error, ϵ, outer_iters)
+    (; status, x, y, s, kkt_error, ϵ, outer_iters, total_iters)
 end
 
 """Helper function to compute the step size `α` which solves:
