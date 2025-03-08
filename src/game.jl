@@ -187,11 +187,9 @@ function solve(
     game::ParametricGame,
     θ;
     solver_type = InteriorPoint(),
-    x₀ = zeros(sum(game.dims.x) + sum(game.dims.λ) + game.dims.λ̃),
-    y₀ = ones(sum(game.dims.μ) + game.dims.μ̃),
-    tol = 1e-4,
+    kwargs...
 )
-    (; x, y, s, kkt_error, status) = solve(solver_type, game.mcp, θ; x₀, y₀, tol)
+    (; x, y, s, kkt_error, status) = solve(solver_type, game.mcp, θ; kwargs...)
 
     # Unpack primals per-player for ease of access later.
     end_dims = cumsum(game.dims.x)

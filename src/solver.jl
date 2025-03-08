@@ -46,7 +46,7 @@ function solve(
     max_outer_iters = 50,
     tightening_rate = 0.1,
     loosening_rate = 0.5,
-    min_stepsize = 1e-2,
+    min_stepsize = 1e-4,
     verbose = false,
     linear_solve_algorithm = UMFPACKFactorization(),
 )
