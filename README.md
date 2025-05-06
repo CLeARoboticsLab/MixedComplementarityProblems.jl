@@ -124,7 +124,7 @@ This will generate a video animation and save it as `sim_steps.mp4`, and it shou
 
 ## Acknowledgement and future plans
 
-This project inherits many key ideas from [ParametricMCPs](https://github.com/JuliaGameTheoreticPlanning/ParametricMCPs.jl), which provides essentially identical functionality but which currently only supports the (closed-source, but otherwise excellent [PATH](https://pages.cs.wisc.edu/~ferris/path.html) solver). Ultimately, this `MixedComplementarityProblems` will likely merge with `ParametricMCPs` to provide an identical frontend and allow users a flexible choice of backend solver. Currently, `MixedComplementarityProblems` replicates a substantially similar interface as that provided by `ParametricMCPs`, but there are some (potentially annoying) differences that users should take care to notice, e.g., in the function signature for `solve(...)`.
+This project inherits many key ideas from [ParametricMCPs](https://github.com/JuliaGameTheoreticPlanning/ParametricMCPs.jl), which provides essentially identical functionality but which currently only supports the (closed-source, but otherwise excellent) [PATH](https://pages.cs.wisc.edu/~ferris/path.html) solver. Ultimately, this `MixedComplementarityProblems` will likely merge with `ParametricMCPs` to provide an identical frontend and allow users a flexible choice of backend solver. Currently, `MixedComplementarityProblems` replicates a substantially similar interface as that provided by `ParametricMCPs`, but there are some (potentially annoying) differences that users should take care to notice, e.g., in the function signature for `solve(...)`.
 
 ## Other related projects
 
