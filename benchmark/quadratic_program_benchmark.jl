@@ -31,7 +31,7 @@ function generate_test_problem(
             A * x - b
         end
 
-    K(z, θ) =
+    K(z; θ) =
         let
             x = z[1:num_primals]
             y = z[(num_primals + 1):end]

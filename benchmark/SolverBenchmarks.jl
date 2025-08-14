@@ -10,6 +10,7 @@ using Distributions: Distributions
 using LazySets: LazySets
 using PATHSolver: PATHSolver
 using ProgressMeter: @showprogress
+using Symbolics: Symbolics
 
 abstract type BenchmarkType end
 struct QuadraticProgramBenchmark <: BenchmarkType end
