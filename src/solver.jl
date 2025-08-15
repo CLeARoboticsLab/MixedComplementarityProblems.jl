@@ -27,11 +27,12 @@ Keyword arguments:
     - `tol::Real = 1e-4`: the tolerance for the KKT error.
     - `max_inner_iters::Int = 20`: the maximum number of inner iterations.
     - `max_outer_iters::Int = 50`: the maximum number of outer iterations.
-    - `tightening_rate::Real = 0.1`: the rate at which to tighten the tolerance.
-    - `loosening_rate::Real = 0.5`: the rate at which to loosen the tolerance.
+    - `tightening_rate::Real = 0.1`: rate for tightening tolerance and regularization.
+    - `loosening_rate::Real = 0.5`: rate for loosening tolerance and regularization.
     - `min_stepsize::Real = 1e-2`: the minimum step size for the linesearch.
     - `verbose::Bool = false`: whether to print debug information.
     - `linear_solve_algorithm::LinearSolve.SciMLLinearSolveAlgorithm`: the linear solve algorithm to use. Any solver from `LinearSolve.jl` can be used.
+    - `regularize_linear_solve::Symbol = :none`: scheme for regularizing the linear system matrix ∇F. Options are {:none, :identity, :internal}.
 """
 function solve(
     ::InteriorPoint,
@@ -49,6 +50,7 @@ function solve(
     min_stepsize = 1e-4,
     verbose = false,
     linear_solve_algorithm = UMFPACKFactorization(),
+    regularize_linear_solve = :identity,
 )
     # Set up common memory.
     ∇F = mcp.∇F_z!.result_buffer
@@ -61,11 +63,12 @@ function solve(
 
     linsolve = init(LinearProblem(∇F, δz), linear_solve_algorithm)
 
-    # Main solver loop.
+    # Initialize primal, dual, and slack variables.
     x = @something(x₀, zeros(mcp.unconstrained_dimension))
     y = @something(y₀, ones(mcp.constrained_dimension))
     s = @something(s₀, ones(mcp.constrained_dimension))
 
+    # Initialize IP relaxation parameter.
     if ϵ₀ === :auto
         is_warmstarted = !isnothing(x₀) && !isnothing(y₀) && !isnothing(s₀)
         if is_warmstarted
@@ -77,6 +80,10 @@ function solve(
         ϵ = ϵ₀
     end
 
+    # Initialize regularization parameter.
+    η = tol
+
+    # Main solver loop.
     status = :solved
     total_iters = 0
     inner_iters = 1
@@ -88,14 +95,30 @@ function solve(
 
         while kkt_error > ϵ && inner_iters < max_inner_iters
             total_iters += 1
-            # Compute the Newton step.
-            # TODO: Can add some adaptive regularization.
+
+            # Compute the (regularized) Newton step.
             # TODO: use a linear operator with a lazy gradient computation here.
-            mcp.F!(F, x, y, s; θ, ϵ)
-            mcp.∇F_z!(∇F, x, y, s; θ, ϵ)
-            linsolve.A = ∇F + tol * I
+            if regularize_linear_solve === :internal
+                mcp.F!(F, x, y, s; θ, ϵ, η = 0.0)
+                mcp.∇F_z!(∇F, x, y, s; θ, ϵ, η)
+            else
+                mcp.F!(F, x, y, s; θ, ϵ)
+                mcp.∇F_z!(∇F, x, y, s; θ, ϵ)
+            end
+
+            if regularize_linear_solve === :identity
+                if size(∇F, 1) == size(∇F, 2)
+                    linsolve.A = ∇F + η * I
+                else
+                    @warn "Cannot use identity regularization on a nonsquare problem."
+                end
+            else
+                linsolve.A = ∇F
+            end
+
             linsolve.b = -F
             solution = solve!(linsolve)
+
             if !SciMLBase.successful_retcode(solution) &&
                (solution.retcode !== SciMLBase.ReturnCode.Default)
                 verbose &&
@@ -129,10 +152,12 @@ function solve(
             break
         end
 
-        ϵ *= if status === :solved
-            1 - exp(-tightening_rate * inner_iters)
+        if status === :solved
+            ϵ *= 1 - exp(-tightening_rate * inner_iters)
+            η *= 1 - exp(-tightening_rate * inner_iters)
         else
-            1 + exp(-loosening_rate * inner_iters)
+            ϵ *= 1 + exp(-loosening_rate * inner_iters)
+            η *= 1 + exp(-loosening_rate * inner_iters)
         end
         ϵ = min(ϵ, one(ϵ))
         outer_iters += 1

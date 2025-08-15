@@ -59,6 +59,7 @@ function build_parametric_game(;
         K_symbolic,
         z_symbolic,
         θ_symbolic,
+        η_symbolic,
         lower_bounds,
         upper_bounds,
         dims,
@@ -72,7 +73,8 @@ function build_parametric_game(;
         z_symbolic,
         θ_symbolic,
         lower_bounds,
-        upper_bounds,
+        upper_bounds;
+        η_symbolic,
     )
     MixedComplementarityProblems.ParametricGame(
         problems,

@@ -30,7 +30,7 @@ function ParametricGame(;
     shared_equality = nothing,
     shared_inequality = nothing,
 )
-    (; K_symbolic, z_symbolic, θ_symbolic, lower_bounds, upper_bounds, dims) =
+    (; K_symbolic, z_symbolic, θ_symbolic, η_symbolic, lower_bounds, upper_bounds, dims) =
         game_to_mcp(;
             test_point,
             test_parameter,
@@ -39,7 +39,15 @@ function ParametricGame(;
             shared_inequality,
         )
 
-    mcp = PrimalDualMCP(K_symbolic, z_symbolic, θ_symbolic, lower_bounds, upper_bounds)
+    mcp = PrimalDualMCP(
+        K_symbolic,
+        z_symbolic,
+        θ_symbolic,
+        lower_bounds,
+        upper_bounds;
+        η_symbolic,
+    )
+
     ParametricGame(problems, shared_equality, shared_inequality, dims, mcp)
 end
 
@@ -62,7 +70,7 @@ function game_to_mcp(;
         shared_inequality,
     )
 
-    # Define primal and dual variables for the game, and game parameters..
+    # Define primal and dual variables for the game, and game parameters.
     # Note that BlockArrays can handle blocks of zero size.
     backend = SymbolicTracingUtils.SymbolicsBackend()
     x =
@@ -80,6 +88,10 @@ function game_to_mcp(;
         SymbolicTracingUtils.make_variables(backend, :θ, sum(dims.θ)) |>
         to_blockvector(dims.θ)
 
+    # Parameter for adding a scaled identity to the Hessian of each player's
+    # Lagrangian wrt that player's variable.
+    η = only(SymbolicTracingUtils.make_variables(backend, :η, 1))
+
     # Build symbolic expressions for objectives and constraints.
     fs = map(problems, blocks(θ)) do p, θi
         p.objective(x, θi)
@@ -94,12 +106,12 @@ function game_to_mcp(;
     g̃ = isnothing(shared_equality) ? nothing : shared_equality(x, θ)
     h̃ = isnothing(shared_inequality) ? nothing : shared_inequality(x, θ)
 
-    # Build gradient of each player's Lagrangian.
+    # Build gradient of each player's Lagrangian and include regularization.
     ∇Ls = map(fs, gs, hs, blocks(x), blocks(λ), blocks(μ)) do f, g, h, xi, λi, μi
         L =
             f - (isnothing(g) ? 0 : sum(λi .* g)) - (isnothing(h) ? 0 : sum(μi .* h)) - (isnothing(g̃) ? 0 : sum(λ̃ .* g̃)) -
             (isnothing(h̃) ? 0 : sum(μ̃ .* h̃))
-        SymbolicTracingUtils.gradient(L, xi)
+        SymbolicTracingUtils.gradient(L, xi) + η * xi
     end
 
     # Build MCP representation.
@@ -150,6 +162,7 @@ function game_to_mcp(;
         K_symbolic = collect(K),
         z_symbolic = collect(z),
         θ_symbolic = collect(θ),
+        η_symbolic = η,
         lower_bounds,
         upper_bounds,
         dims,
@@ -183,13 +196,9 @@ function dimensions(
 end
 
 "Solve a parametric game."
-function solve(
-    game::ParametricGame,
-    θ;
-    solver_type = InteriorPoint(),
-    kwargs...
-)
-    (; x, y, s, kkt_error, status) = solve(solver_type, game.mcp, θ; kwargs...)
+function solve(game::ParametricGame, θ; solver_type = InteriorPoint(), kwargs...)
+    (; x, y, s, kkt_error, status) =
+        solve(solver_type, game.mcp, θ; regularize_linear_solve = :internal, kwargs...)
 
     # Unpack primals per-player for ease of access later.
     end_dims = cumsum(game.dims.x)

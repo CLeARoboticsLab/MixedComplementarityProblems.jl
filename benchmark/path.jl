@@ -36,7 +36,8 @@ function benchmark(
             problem.z_symbolic,
             problem.θ_symbolic,
             problem.lower_bounds,
-            problem.upper_bounds,
+            problem.upper_bounds;
+            η_symbolic = hasproperty(problem, :η_symbolic) ? problem.η_symbolic : nothing,
         )
     end
 
@@ -46,19 +47,28 @@ function benchmark(
     elseif hasproperty(problem, :K)
         # Generated a callable problem.
         ParametricMCPs.ParametricMCP(
-            problem.K,
+            (z, θ) -> problem.K(z; θ),
             problem.lower_bounds,
             problem.upper_bounds,
             parameter_dimension,
         )
     else
         # Generated a symbolic problem.
+        K_symbolic =
+            !hasproperty(problem, :η_symbolic) ? problem.K_symbolic :
+            Vector{Symbolics.Num}(
+                Symbolics.substitute(
+                    problem.K_symbolic,
+                    Dict([problem.η_symbolic => 0.0]),
+                ),
+            )
+
         ParametricMCPs.ParametricMCP(
-            problem.K_symbolic,
+            K_symbolic,
             problem.z_symbolic,
             problem.θ_symbolic,
             problem.lower_bounds,
-            problem.upper_bounds
+            problem.upper_bounds;
         )
     end
 
