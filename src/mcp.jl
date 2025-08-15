@@ -12,7 +12,7 @@ hand side of this system of equations. Here, `η` is an optional nonnegative
 regularization parameter defined by "internally-regularized" problems.
 """
 struct PrimalDualMCP{T1,T2,T3}
-    "A callable `F!(result, x, y, s; θ, ϵ, [η])` to the KKT error in-place."
+    "A callable `F!(result, x, y, s; θ, ϵ, [η])` to compute the KKT error in-place."
     F!::T1
     "A callable `∇F_z!(result, x, y, s; θ, ϵ, [η])` to compute ∇F wrt z in-place."
     ∇F_z!::T2
