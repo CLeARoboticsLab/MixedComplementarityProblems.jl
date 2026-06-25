@@ -323,3 +323,145 @@ function ldiv!(out, cache::BatchedSparseCache, rhs)
     end
     out
 end
+
+# ---------------------------------------------------------------------------
+# Batched interior-point solver (the §5 loop in docs/gpu_kkt_design.md), written
+# entirely against the verb set so the strategy and device are pluggable. This is a
+# NEW dispatch alongside the existing unbatched `solve(::InteriorPoint, ...)`; the two
+# can be collapsed once the B=1 path matches/exceeds the unbatched solver.
+#
+# Batch-axis invariant: every per-instance scalar (ϵ, η, kkt_error, the step sizes,
+# the convergence mask) is a length-B vector; reductions are over the coordinate axis
+# (dims = 1) and never collapse the batch axis.
+# ---------------------------------------------------------------------------
+
+"Interior-point solver that solves a whole batch of MCP instances simultaneously."
+struct BatchedInteriorPoint <: SolverType end
+
+"""
+    max_step_to_boundary(V, Δ; τ = 0.995)
+
+Closed-form fraction-to-the-boundary step, one stepsize per instance. `V, Δ` are
+`(k × B)`; returns a length-`B` vector with
+`α_i = min(1, min_{j : Δ[j,i] < 0} -τ·V[j,i]/Δ[j,i])`. Exact (no backtracking) and
+fully parallel: the reduction is over the coordinate axis only.
+"""
+function max_step_to_boundary(V, Δ; τ = 0.995)
+    ratio = @. ifelse(Δ < 0, -τ * V / Δ, Inf)
+    α = vec(minimum(ratio; dims = 1))
+    clamp!(α, zero(eltype(α)), one(eltype(α)))
+    α
+end
+
+"""
+    solve(::BatchedInteriorPoint, mcp, Θ; strategy, device, kwargs...)
+
+Solve `B = size(Θ, 2)` MCP instances simultaneously, where column `b` of the
+`(nθ × B)` matrix `Θ` is instance `b`'s parameter vector. Mirrors the unbatched
+`InteriorPoint` schedule (outer tightening of ϵ/η, inner Newton with fraction-to-the-
+boundary line search) with all state batched and per-instance. Requires `mcp` built
+with `compute_kernel_evaluators = true`.
+
+Returns `(; status, x, y, s, kkt_error, ϵ, outer_iters, total_iters)` where `status`
+is a length-`B` vector of `:solved`/`:failed`, `x, y, s` are `(· × B)`, and
+`kkt_error, ϵ` are length-`B`.
+"""
+function solve(
+    ::BatchedInteriorPoint,
+    mcp::PrimalDualMCP,
+    Θ::AbstractMatrix;
+    strategy::KKTStrategy = BatchedSparse(),
+    device = KernelAbstractions.CPU(),
+    X₀ = nothing,
+    Y₀ = nothing,
+    S₀ = nothing,
+    tol = 1e-4,
+    ϵ₀ = :auto,
+    max_inner_iters = 20,
+    max_outer_iters = 50,
+    tightening_rate = 0.1,
+    loosening_rate = 0.5,
+)
+    nx = mcp.unconstrained_dimension
+    ny = mcp.constrained_dimension
+    d = nx + 2ny
+    B = size(Θ, 2)
+
+    cache = materialize(mcp, strategy, device; batch_size = B)
+
+    # Batched primal-dual state (solver-owned). Residual F and step δz are plain
+    # (d × B) arrays; the Jacobian/factorization live inside the cache.
+    X = isnothing(X₀) ? KernelAbstractions.zeros(device, Float64, nx, B) : copy(X₀)
+    Y = isnothing(Y₀) ? KernelAbstractions.ones(device, Float64, ny, B) : copy(Y₀)
+    S = isnothing(S₀) ? KernelAbstractions.ones(device, Float64, ny, B) : copy(S₀)
+    F = KernelAbstractions.zeros(device, Float64, d, B)
+    δz = KernelAbstractions.zeros(device, Float64, d, B)
+    δx = view(δz, 1:nx, :)
+    δy = view(δz, (nx + 1):(nx + ny), :)
+    δs = view(δz, (nx + ny + 1):d, :)
+
+    warm = !isnothing(X₀) && !isnothing(Y₀) && !isnothing(S₀)
+    ϵ_init = ϵ₀ === :auto ? (warm ? tol : one(tol)) : float(ϵ₀)
+    ϵ = KernelAbstractions.zeros(device, Float64, B)
+    ϵ .= ϵ_init
+    η = KernelAbstractions.zeros(device, Float64, B)
+    η .= tol
+    done = KernelAbstractions.zeros(device, Bool, B)
+
+    residual!(F, mcp, X, Y, S, Θ, ϵ; device)
+    kkt = vec(maximum(abs, F; dims = 1))
+
+    outer = 0
+    total = 0
+    while !all(done) && outer < max_outer_iters
+        # `inner` starts at 1 (matching the unbatched solver): the tightening factor
+        # `1 - exp(-rate·inner)` must never be evaluated at inner = 0, which would
+        # zero out ϵ when a subproblem is already converged at entry.
+        inner = 1
+        while any((kkt .> ϵ) .& .!done) && inner < max_inner_iters
+            jacobian!(cache, mcp, X, Y, S, Θ, ϵ, η; device)
+            factorize!(cache)
+            ldiv!(δz, cache, -F)
+
+            # Per-instance step sizes; freeze instances that are done or whose current
+            # subproblem has already converged (kkt ≤ ϵ) by zeroing their step.
+            α_s = max_step_to_boundary(S, δs)
+            α_y = max_step_to_boundary(Y, δy)
+            stepping = (kkt .> ϵ) .& .!done
+            α_s .*= stepping
+            α_y .*= stepping
+            X .+= reshape(α_s, 1, :) .* δx
+            S .+= reshape(α_s, 1, :) .* δs
+            Y .+= reshape(α_y, 1, :) .* δy
+
+            total += 1
+            inner += 1
+            residual!(F, mcp, X, Y, S, Θ, ϵ; device)
+            kkt = vec(maximum(abs, F; dims = 1))
+        end
+
+        # Outer update, per instance: tighten ϵ/η where the subproblem converged,
+        # loosen where it didn't; mark instances done once converged at ϵ ≤ tol.
+        subconverged = kkt .≤ ϵ
+        done .= done .| (subconverged .& (ϵ .≤ tol))
+        tighten = 1 - exp(-tightening_rate * inner)
+        loosen = 1 + exp(-loosening_rate * inner)
+        working = .!done
+        @. ϵ = ifelse(working, ifelse(subconverged, ϵ * tighten, ϵ * loosen), ϵ)
+        @. η = ifelse(working, ifelse(subconverged, η * tighten, η * loosen), η)
+        @. ϵ = min(ϵ, one(eltype(ϵ)))
+        outer += 1
+    end
+
+    status = map(b -> b ? :solved : :failed, collect(done))
+    (;
+        status,
+        x = X,
+        y = Y,
+        s = S,
+        kkt_error = kkt,
+        ϵ,
+        outer_iters = outer,
+        total_iters = total,
+    )
+end
