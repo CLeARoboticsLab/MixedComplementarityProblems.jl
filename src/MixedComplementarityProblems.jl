@@ -1,7 +1,7 @@
 module MixedComplementarityProblems
 
 using SparseArrays: SparseArrays
-using LinearAlgebra: LinearAlgebra, I, norm, eigvals, Diagonal
+using LinearAlgebra: LinearAlgebra, I, norm, eigvals
 using BlockArrays: blocks, blocksizes
 using TrajectoryGamesBase: to_blockvector
 using SymbolicTracingUtils: SymbolicTracingUtils as SymbolicTracingUtils

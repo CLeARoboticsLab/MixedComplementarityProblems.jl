@@ -1,4 +1,8 @@
-"Benchmark interior point solver against PATH on a bunch of random test problems."
+"
+Benchmark interior point solver against PATH on a bunch of random test problems.
+- benchmark_type: QuadraticProgramBenchmark(), TrajectoryGameBenchmark()
+"
+
 function benchmark(
     benchmark_type;
     num_samples = 100,

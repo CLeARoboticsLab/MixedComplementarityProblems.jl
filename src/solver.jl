@@ -32,7 +32,7 @@ Keyword arguments:
     - `min_stepsize::Real = 1e-2`: the minimum step size for the linesearch.
     - `verbose::Bool = false`: whether to print debug information.
     - `linear_solve_algorithm::LinearSolve.SciMLLinearSolveAlgorithm`: the linear solve algorithm to use. Any solver from `LinearSolve.jl` can be used.
-    - `regularize_linear_solve::Symbol = :none`: scheme for regularizing the linear system matrix ∇F. Options are {:none, :identity, :internal, :Tikhonov, :Marquardt}.
+    - `regularize_linear_solve::Symbol = :identity`: scheme for regularizing the linear system matrix ∇F. Options are {:none, :identity, :internal, :Tikhonov, :Marquardt}.
 """
 function solve(
     ::InteriorPoint,
@@ -119,7 +119,7 @@ function solve(
                 linsolve.b = -∇F' * F
             elseif regularize_linear_solve === :Marquardt
                 d = vec(sum(abs2, ∇F; dims = 1))
-                D = Diagonal(d)
+                D = LinearAlgebra.Diagonal(d)
                 linsolve.A = (∇F' * ∇F) + η * D
                 linsolve.b = -∇F' * F
             else
