@@ -11,7 +11,7 @@ for some ϵ > 0. Define the function `F(x, y, s; θ, ϵ, [η])` to return the le
 hand side of this system of equations. Here, `η` is an optional nonnegative
 regularization parameter defined by "internally-regularized" problems.
 """
-struct PrimalDualMCP{T1,T2,T3}
+struct PrimalDualMCP{T1,T2,T3,T4,T5}
     "A callable `F!(result, x, y, s; θ, ϵ, [η])` to compute the KKT error in-place."
     F!::T1
     "A callable `∇F_z!(result, x, y, s; θ, ϵ, [η])` to compute ∇F wrt z in-place."
@@ -22,6 +22,14 @@ struct PrimalDualMCP{T1,T2,T3}
     unconstrained_dimension::Int
     "Dimension of constrained variable."
     constrained_dimension::Int
+    "Kernel-safe per-instance residual evaluator `F_kernel(out, x, y, s, θ, ϵ)`
+     (SerialForm + cse, no sharding) for the batched/GPU path. `nothing` unless the
+     MCP was built with `compute_kernel_evaluators = true`."
+    F_kernel::T4
+    "Kernel-safe per-instance ∂F/∂z evaluator `∇F_z_kernel(out, x, y, s, θ, ϵ)` that
+     fills the shared pattern's `nnz` nonzero values, in the same column-major order
+     as `∇F_z!.rows`/`.cols`. `nothing` unless built."
+    ∇F_z_kernel::T5
 end
 
 "Helper to construct a PrimalDualMCP from callable functions `G(.)` and `H(.)`."
@@ -32,6 +40,7 @@ function PrimalDualMCP(
     constrained_dimension,
     parameter_dimension,
     compute_sensitivities = false,
+    compute_kernel_evaluators = false,
     backend = SymbolicTracingUtils.SymbolicsBackend(),
     backend_options = (;),
 )
@@ -48,6 +57,7 @@ function PrimalDualMCP(
         y_symbolic,
         θ_symbolic;
         compute_sensitivities,
+        compute_kernel_evaluators,
         backend_options,
     )
 end
@@ -61,6 +71,7 @@ function PrimalDualMCP(
     θ_symbolic::Vector{T},
     η_symbolic::Union{Nothing,T} = nothing;
     compute_sensitivities = false,
+    compute_kernel_evaluators = false,
     backend_options = (;),
 ) where {T<:Union{SymbolicTracingUtils.FD.Node,SymbolicTracingUtils.Symbolics.Num}}
     # Create symbolic slack variable `s` and parameter `ϵ`.
@@ -160,7 +171,51 @@ function PrimalDualMCP(
     ∇F_z! = process_∇F(F_symbolic, z_symbolic)
     ∇F_θ! = !compute_sensitivities ? nothing : process_∇F(F_symbolic, θ_symbolic)
 
-    PrimalDualMCP(F!, ∇F_z!, ∇F_θ!, length(x_symbolic), length(y_symbolic))
+    # Kernel-safe evaluators for the batched/GPU path. Built with SerialForm + cse
+    # (no sharding) so the generated body is a single straight-line scalar function
+    # callable inside a KernelAbstractions kernel. Opt-in: SerialForm can be slow to
+    # compile on large problems (see D2 in docs/gpu_kkt_design.md), so CPU-only users
+    # pay nothing by default.
+    F_kernel, ∇F_z_kernel = if compute_kernel_evaluators
+        T <: SymbolicTracingUtils.Symbolics.Num || error(
+            "Kernel evaluators are currently only supported with the Symbolics " *
+            "backend (got symbolic element type $T).",
+        )
+        isnothing(η_symbolic) || error(
+            "Kernel evaluators with internal (η) regularization are not yet " *
+            "supported; build without `internally_regularized` and apply η additively.",
+        )
+        _build_kernel = expr -> SymbolicTracingUtils.Symbolics.build_function(
+            expr,
+            x_symbolic,
+            y_symbolic,
+            s_symbolic,
+            θ_symbolic,
+            ϵ_symbolic;
+            expression = Val{false},
+            parallel = SymbolicTracingUtils.Symbolics.SerialForm(),
+            cse = true,
+        )[2]   # in-place form
+
+        # Recompute the ∂F/∂z sparsity the same way `process_∇F` does, so the nonzero
+        # value order matches `∇F_z!.rows`/`.cols` exactly.
+        ∇Fz_symbolic = SymbolicTracingUtils.sparse_jacobian(F_symbolic, z_symbolic)
+        _, _, ∇Fz_values = SparseArrays.findnz(∇Fz_symbolic)
+
+        (_build_kernel(F_symbolic), _build_kernel(collect(∇Fz_values)))
+    else
+        (nothing, nothing)
+    end
+
+    PrimalDualMCP(
+        F!,
+        ∇F_z!,
+        ∇F_θ!,
+        length(x_symbolic),
+        length(y_symbolic),
+        F_kernel,
+        ∇F_z_kernel,
+    )
 end
 
 """ Construct a PrimalDualMCP from `K(z; θ) ⟂ z̲ ≤ z ≤ z̅`, where `K` is callable.
@@ -173,6 +228,7 @@ function PrimalDualMCP(
     parameter_dimension,
     internally_regularized = false,
     compute_sensitivities = false,
+    compute_kernel_evaluators = false,
     backend = SymbolicTracingUtils.SymbolicsBackend(),
     backend_options = (;),
 )
@@ -191,6 +247,7 @@ function PrimalDualMCP(
             upper_bounds;
             η_symbolic,
             compute_sensitivities,
+            compute_kernel_evaluators,
             backend_options,
         )
     end
@@ -202,6 +259,7 @@ function PrimalDualMCP(
         lower_bounds,
         upper_bounds;
         compute_sensitivities,
+        compute_kernel_evaluators,
         backend_options,
     )
 end
@@ -217,6 +275,7 @@ function PrimalDualMCP(
     upper_bounds::Vector;
     η_symbolic::Union{Nothing,T} = nothing,
     compute_sensitivities = false,
+    compute_kernel_evaluators = false,
     backend_options = (;),
 ) where {T<:Union{SymbolicTracingUtils.FD.Node,SymbolicTracingUtils.Symbolics.Num}}
     @assert all(isinf.(upper_bounds)) && all(isinf.(lower_bounds) .|| lower_bounds .== 0)
@@ -237,6 +296,7 @@ function PrimalDualMCP(
         θ_symbolic,
         η_symbolic;
         compute_sensitivities,
+        compute_kernel_evaluators,
         backend_options,
     )
 end

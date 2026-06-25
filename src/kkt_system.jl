@@ -174,3 +174,82 @@ end
 function materialize(::PrimalDualMCP, strategy::KKTStrategy, device; batch_size)
     error("`materialize` is not yet implemented for strategy $(typeof(strategy)).")
 end
+
+# ---------------------------------------------------------------------------
+# residual! and jacobian! — KernelAbstractions implementation, one MCP instance
+# per thread. Validated on the CPU() backend.
+#
+# Naming convention: UPPERCASE Latin denotes a batched `(· × B)` device array
+# (`X, Y, S, Θ, F`, and the cache's value matrix `V`); lowercase Greek `ϵ`, `η` are
+# the per-instance relaxation/regularization, stored as length-`B` vectors. Inside a
+# kernel, column `b` (`X[:, b]`, …) is the single instance handed to the per-instance
+# evaluator.
+#
+# NOTE (GPU): these slice per-instance columns with `@views`, which is correct on the
+# CPU backend but not generally allowed inside a GPU kernel; a GPU backend will need a
+# view-free variant (manual column offsets). Likewise `cache.diag_nz` is a host
+# `Vector` here — for a GPU backend it must be device-resident. The trailing
+# `synchronize` is kept for correctness; for GPU it should be hoisted to where the
+# solver actually reads values back to the host (the convergence check), to avoid a
+# stall every Newton iteration. The per-instance evaluators are already kernel-safe.
+# ---------------------------------------------------------------------------
+
+@kernel function _residual_kernel!(F, X, Y, S, Θ, ϵ, f!)
+    b = @index(Global)
+    @views f!(F[:, b], X[:, b], Y[:, b], S[:, b], Θ[:, b], ϵ[b])
+end
+
+"""
+    residual!(F, mcp, X, Y, S, Θ, ϵ; device)
+
+Fill the residual `F` (a dense `(d × B)` device array) for the whole batch, one MCP
+instance per thread. `X, Y, S, Θ` are `(· × B)` batched device arrays and `ϵ` is a
+length-`B` relaxation vector. Requires `mcp` to carry a kernel residual evaluator
+(build it with `compute_kernel_evaluators = true`).
+"""
+function residual!(F, mcp::PrimalDualMCP, X, Y, S, Θ, ϵ; device)
+    isnothing(mcp.F_kernel) && error(
+        "This MCP has no kernel residual evaluator. Construct it with " *
+        "`compute_kernel_evaluators = true`.",
+    )
+    _residual_kernel!(device)(F, X, Y, S, Θ, ϵ, mcp.F_kernel; ndrange = size(F, 2))
+    KernelAbstractions.synchronize(device)
+    F
+end
+
+@kernel function _jacobian_kernel!(V, X, Y, S, Θ, ϵ, ∇f!, diag_nz, η)
+    b = @index(Global)
+    @views ∇f!(V[:, b], X[:, b], Y[:, b], S[:, b], Θ[:, b], ϵ[b])
+    # Fused additive regularization: each thread adds its own η[b] to the
+    # structurally-present diagonal entries of its column, in the same per-instance
+    # parallel pass (before any synchronization).
+    @inbounds for k in diag_nz
+        V[k, b] += η[b]
+    end
+end
+
+"""
+    jacobian!(cache, mcp, X, Y, S, Θ, ϵ, η; device)
+
+Assemble the batched `∇F` into `cache.nzval` (`(nnz × B)`, each column an instance's
+nonzero values in the shared pattern's order) one instance per thread, adding the
+per-instance regularization `η` (a length-`B` vector) to the structurally-present
+diagonal entries within the same kernel.
+
+NOTE: only the diagonal slots in `cache.diag_nz` are reachable additively; patterns
+with missing diagonals need augmentation for full identity regularization (internal-η
+regularization, baked into the evaluator, is the planned alternative — not yet
+supported for kernel evaluators).
+"""
+function jacobian!(cache::BatchedSparseCache, mcp::PrimalDualMCP, X, Y, S, Θ, ϵ, η; device)
+    isnothing(mcp.∇F_z_kernel) && error(
+        "This MCP has no kernel Jacobian evaluator. Construct it with " *
+        "`compute_kernel_evaluators = true`.",
+    )
+    _jacobian_kernel!(device)(
+        cache.nzval, X, Y, S, Θ, ϵ, mcp.∇F_z_kernel, cache.diag_nz, η;
+        ndrange = cache.batch_size,
+    )
+    KernelAbstractions.synchronize(device)
+    cache
+end

@@ -7,7 +7,7 @@ using TrajectoryGamesBase: to_blockvector
 using SymbolicTracingUtils: SymbolicTracingUtils as SymbolicTracingUtils
 using LinearSolve: LinearProblem, init, solve!, KrylovJL_GMRES, UMFPACKFactorization
 using SciMLBase: SciMLBase
-using KernelAbstractions: KernelAbstractions
+using KernelAbstractions: KernelAbstractions, @kernel, @index
 
 include("mcp.jl")
 include("solver.jl")

@@ -102,17 +102,20 @@ end
 Computes the shared sparsity pattern once, allocates all device buffers."""
 materialize(mcp::PrimalDualMCP, strategy::KKTStrategy, device; batch_size) :: KKTCache
 
+# Naming convention: UPPERCASE Latin = batched (·×B) arrays (X, Y, S, Θ, F);
+# lowercase Greek ϵ, η = per-instance length-B vectors.
+
 """Fill residual `F` (d×B) for the whole batch. Representation-agnostic
 (F is always dense d×B), so this is the SAME for every strategy — it's a method
 on the mcp's residual evaluator + device, not on the strategy."""
-residual!(F, mcp, x, y, s, θ, ϵ; device)
+residual!(F, mcp, X, Y, S, Θ, ϵ; device)
 
 """Assemble ∇F (+ regularization η) into the cache's internal representation.
 Strategy-specific: BatchedSparse fills nzval (nnz×B) then adds η at `diag_nz`;
 BatchedDense scatters the same nnz values into a zeroed (d×d×B); SparseSingle
 fills a single (d×d). η may be applied internally (if the evaluator has an η slot)
 or additively on the diagonal — a per-strategy detail the solver doesn't see."""
-jacobian!(cache, mcp, x, y, s, θ, ϵ, η; device)
+jacobian!(cache, mcp, X, Y, S, Θ, ϵ, η; device)
 
 """Factorize the batched system currently in `cache` (reused by ldiv!).
 BatchedDense: batched LU. BatchedSparse: numeric factorization on the shared
@@ -205,7 +208,11 @@ Note: **no `CuArray`, no `lu`, no sparsity** appears in this loop. That's the go
   (only viable for tiny `d`; dies at 1–2k via register spill). The Jacobian evaluator
   always fills the `nnz` value vector; the **strategy** decides the container (sparse
   keeps it; dense scatters into `d×d×B`). The "SVector vs in-place" fork dissolves.
-  *(Validated end-to-end in `gpu_prototype/batched_eval.jl`.)*
+  These kernel-safe evaluators (`mcp.F_kernel`, `mcp.∇F_z_kernel`, SerialForm + cse)
+  are built opt-in at construction via `PrimalDualMCP(...; compute_kernel_evaluators =
+  true)`, so CPU-only users pay no extra compile cost.
+  *(Validated end-to-end in `gpu_prototype/batched_eval.jl` and
+  `gpu_prototype/check_residual_jacobian.jl`.)*
 - **R4 — Regularization via `η` arg, not a separate verb.** `η` flows into
   `jacobian!`; internal-vs-additive is a per-strategy implementation detail.
 
