@@ -465,3 +465,82 @@ function solve(
         total_iters = total,
     )
 end
+
+# ---------------------------------------------------------------------------
+# Batched parameter sensitivities  ∂z/∂θ = -(∇F_z)⁻¹ ∇F_θ, per instance.
+#
+# Reuses the per-instance factorizations: ∇F_z is assembled (unregularized) at the
+# converged iterate and factorized; the dense (d × nθ) parameter Jacobian -∇F_θ is
+# the multi-rhs right-hand side, solved via the (d × K × B) `ldiv!`.
+# ---------------------------------------------------------------------------
+
+"Multi-rhs solve: `out[:,:,b] = ∇F_z[b]⁻¹ rhs[:,:,b]` per instance, reusing the
+factorizations from `factorize!`. `out`/`rhs` are `(d × K × B)` (K right-hand sides;
+batch axis last). CPU backend only for now."
+function ldiv!(
+    out::AbstractArray{<:Any,3},
+    cache::BatchedSparseCache,
+    rhs::AbstractArray{<:Any,3},
+)
+    cache.device isa KernelAbstractions.CPU || error(
+        "ldiv! for BatchedSparse is currently implemented only on the CPU backend.",
+    )
+    for b in 1:cache.batch_size
+        @views LinearAlgebra.ldiv!(out[:, :, b], cache.factor[b], rhs[:, :, b])
+    end
+    out
+end
+
+@kernel function _jacobian_θ_kernel!(Jθ, X, Y, S, Θ, ϵ, ∇F_θ!)
+    b = @index(Global)
+    @views ∇F_θ!(Jθ[:, :, b], X[:, b], Y[:, b], S[:, b], Θ[:, b], ϵ[b])
+end
+
+"""
+    solve_jacobian_θ(mcp, X, Y, S, Θ, ϵ; strategy, device) -> ∂z∂θ
+
+Batched parameter sensitivities of the MCP solution: returns `∂z∂θ` of shape
+`(d × nθ × B)`, where `∂z∂θ[:, :, b]` is `∂z/∂θ` for instance `b` at the point
+`(X[:,b], Y[:,b], S[:,b])` with parameters `Θ[:,b]`. Rows `1:nx` are `∂x/∂θ`, the
+next `ny` are `∂y/∂θ`, the last `ny` are `∂s/∂θ`.
+
+For this to be the true solution sensitivity, `(X, Y, S)` must be a converged
+solution (`F = 0`). Requires `mcp` built with `compute_kernel_evaluators` AND
+`compute_sensitivities`.
+"""
+function solve_jacobian_θ(
+    mcp::PrimalDualMCP,
+    X,
+    Y,
+    S,
+    Θ,
+    ϵ;
+    strategy::KKTStrategy = BatchedSparse(),
+    device = KernelAbstractions.CPU(),
+)
+    isnothing(mcp.∇F_θ_kernel) && error(
+        "This MCP has no kernel θ-Jacobian. Construct it with " *
+        "`compute_kernel_evaluators = true` AND `compute_sensitivities = true`.",
+    )
+    nx = mcp.unconstrained_dimension
+    ny = mcp.constrained_dimension
+    d = nx + 2ny
+    nθ = size(Θ, 1)
+    B = size(Θ, 2)
+
+    cache = materialize(mcp, strategy, device; batch_size = B)
+
+    # ∇F_z at the (converged) point, unregularized (η = 0), then factorize.
+    jacobian!(cache, mcp, X, Y, S, Θ, ϵ, KernelAbstractions.zeros(device, Float64, B); device)
+    factorize!(cache)
+
+    # Right-hand side -∇F_θ as a dense (d × nθ × B) multi-rhs.
+    rhs = KernelAbstractions.zeros(device, Float64, d, nθ, B)
+    _jacobian_θ_kernel!(device)(rhs, X, Y, S, Θ, ϵ, mcp.∇F_θ_kernel; ndrange = B)
+    KernelAbstractions.synchronize(device)
+    rhs .= .-rhs
+
+    ∂z∂θ = KernelAbstractions.zeros(device, Float64, d, nθ, B)
+    ldiv!(∂z∂θ, cache, rhs)
+    ∂z∂θ
+end

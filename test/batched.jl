@@ -4,6 +4,7 @@ const MCP = MixedComplementarityProblems
 using KernelAbstractions: CPU
 using SparseArrays: sparse, nonzeros, nnz
 using LinearAlgebra: norm, transpose, I
+using FiniteDiff: FiniteDiff
 using Random: Random
 
 @testset "BatchedMCP" begin
@@ -22,6 +23,7 @@ using Random: Random
         unconstrained_dimension = 3,
         constrained_dimension = 3,
         parameter_dimension = 3,
+        compute_sensitivities = true,
         compute_kernel_evaluators = true,
     )
 
@@ -121,5 +123,38 @@ using Random: Random
             @test all(y .> -5e-3)                                          # y ≥ 0
             @test abs(sum(y .* Hval)) < 5e-3                               # complementarity
         end
+    end
+
+    @testset "solve_jacobian_θ matches unbatched sensitivities" begin
+        # Converge each instance (unbatched) and collect the primal-dual point + ϵ.
+        X = zeros(n, B)
+        Y = zeros(m, B)
+        S = zeros(m, B)
+        ϵ = zeros(B)
+        sols = map(1:B) do bb
+            sol = MCP.solve(MCP.InteriorPoint(), mcp, Θ[:, bb])
+            X[:, bb] = sol.x
+            Y[:, bb] = sol.y
+            S[:, bb] = sol.s
+            ϵ[bb] = sol.ϵ
+            sol
+        end
+
+        ∂z∂θ = MCP.solve_jacobian_θ(mcp, X, Y, S, Θ, ϵ; device = dev)
+        @test size(∂z∂θ) == (d, n, B)
+
+        # Each slice matches the unbatched QR-based sensitivity to machine precision.
+        for bb in 1:B
+            ref = MCP.AutoDiff._solve_jacobian_θ(mcp, sols[bb], Θ[:, bb])
+            @test isapprox(∂z∂θ[:, :, bb], ref; atol = 1e-9)
+        end
+
+        # And the full z(θ) Jacobian agrees with finite differences on a sample instance.
+        zofθ =
+            θ -> let sol = MCP.solve(MCP.InteriorPoint(), mcp, θ)
+                [sol.x; sol.y; sol.s]
+            end
+        fd = FiniteDiff.finite_difference_jacobian(zofθ, Θ[:, 1])
+        @test isapprox(∂z∂θ[:, :, 1], fd; atol = 1e-5)
     end
 end

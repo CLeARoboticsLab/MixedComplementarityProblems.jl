@@ -11,7 +11,7 @@ for some ϵ > 0. Define the function `F(x, y, s; θ, ϵ, [η])` to return the le
 hand side of this system of equations. Here, `η` is an optional nonnegative
 regularization parameter defined by "internally-regularized" problems.
 """
-struct PrimalDualMCP{T1,T2,T3,T4,T5}
+struct PrimalDualMCP{T1,T2,T3,T4,T5,T6}
     "A callable `F!(result, x, y, s; θ, ϵ, [η])` to compute the KKT error in-place."
     F!::T1
     "A callable `∇F_z!(result, x, y, s; θ, ϵ, [η])` to compute ∇F wrt z in-place."
@@ -30,6 +30,10 @@ struct PrimalDualMCP{T1,T2,T3,T4,T5}
      fills the shared pattern's `nnz` nonzero values, in the same column-major order
      as `∇F_z!.rows`/`.cols`. `nothing` unless built."
     ∇F_z_kernel::T5
+    "Kernel-safe per-instance ∂F/∂θ evaluator `∇F_θ_kernel(out, x, y, s, θ, ϵ)` that
+     fills the DENSE `(d × nθ)` parameter Jacobian (for batched sensitivities).
+     `nothing` unless built with `compute_kernel_evaluators` AND `compute_sensitivities`."
+    ∇F_θ_kernel::T6
 end
 
 "Helper to construct a PrimalDualMCP from callable functions `G(.)` and `H(.)`."
@@ -176,7 +180,7 @@ function PrimalDualMCP(
     # callable inside a KernelAbstractions kernel. Opt-in: SerialForm can be slow to
     # compile on large problems (see D2 in docs/gpu_kkt_design.md), so CPU-only users
     # pay nothing by default.
-    F_kernel, ∇F_z_kernel = if compute_kernel_evaluators
+    F_kernel, ∇F_z_kernel, ∇F_θ_kernel = if compute_kernel_evaluators
         T <: SymbolicTracingUtils.Symbolics.Num || error(
             "Kernel evaluators are currently only supported with the Symbolics " *
             "backend (got symbolic element type $T).",
@@ -202,9 +206,16 @@ function PrimalDualMCP(
         ∇Fz_symbolic = SymbolicTracingUtils.sparse_jacobian(F_symbolic, z_symbolic)
         _, _, ∇Fz_values = SparseArrays.findnz(∇Fz_symbolic)
 
-        (_build_kernel(F_symbolic), _build_kernel(collect(∇Fz_values)))
+        # Dense (d × nθ) parameter Jacobian for batched sensitivities (nθ is typically
+        # small; the sensitivity solve's rhs is dense regardless).
+        θ_kernel =
+            compute_sensitivities ?
+            _build_kernel(SymbolicTracingUtils.Symbolics.jacobian(F_symbolic, θ_symbolic)) :
+            nothing
+
+        (_build_kernel(F_symbolic), _build_kernel(collect(∇Fz_values)), θ_kernel)
     else
-        (nothing, nothing)
+        (nothing, nothing, nothing)
     end
 
     PrimalDualMCP(
@@ -215,6 +226,7 @@ function PrimalDualMCP(
         length(y_symbolic),
         F_kernel,
         ∇F_z_kernel,
+        ∇F_θ_kernel,
     )
 end
 
