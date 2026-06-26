@@ -5,6 +5,8 @@ using KernelAbstractions: CPU
 using SparseArrays: sparse, nonzeros, nnz
 using LinearAlgebra: norm, transpose, I
 using FiniteDiff: FiniteDiff
+using ForwardDiff: ForwardDiff
+using Zygote: Zygote
 using Random: Random
 
 @testset "BatchedMCP" begin
@@ -156,5 +158,24 @@ using Random: Random
             end
         fd = FiniteDiff.finite_difference_jacobian(zofθ, Θ[:, 1])
         @test isapprox(∂z∂θ[:, :, 1], fd; atol = 1e-5)
+    end
+
+    @testset "BatchedInteriorPoint is differentiable through the batch" begin
+        # Scalar loss over a whole batch of solves; gradient is wrt the (nθ × B) Θ.
+        loss =
+            Θ -> let sol = MCP.solve(MCP.BatchedInteriorPoint(), mcp, Θ; device = dev)
+                sum(sol.x .^ 2) + sum(sol.y .^ 2)
+            end
+
+        ∇_reverse = only(Zygote.gradient(loss, Θ))
+        ∇_forward = only(Zygote.gradient(Θ -> Zygote.forwarddiff(loss, Θ), Θ))
+        ∇_forwarddiff = ForwardDiff.gradient(loss, Θ)
+        ∇_finitediff = FiniteDiff.finite_difference_gradient(loss, Θ)
+
+        # Reverse and forward both contract the same analytic ∂z∂θ, so they agree to
+        # ~machine precision; only the finite-difference checks warrant a loose atol.
+        @test isapprox(∇_reverse, ∇_forward; atol = 1e-9)
+        @test isapprox(∇_reverse, ∇_finitediff; atol = 1e-3)
+        @test isapprox(∇_forwarddiff, ∇_finitediff; atol = 1e-3)
     end
 end
