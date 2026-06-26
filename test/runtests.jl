@@ -114,3 +114,5 @@ end
     end
     @test status == :solved
 end
+
+include("batched.jl")
