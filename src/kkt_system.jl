@@ -112,7 +112,7 @@ primal-dual iterate (`x, y, s`), residual `F`, and step `δz` are NOT stored her
 they belong to the solver. Only what is tied to the `∇F` representation and its
 factorization lives in the cache.
 """
-struct BatchedSparseCache{Dev,M,P,F}
+struct BatchedSparseCache{Dev,M,P,F,Dnz}
     "KernelAbstractions backend the buffers live on."
     device::Dev
     "Residual / KKT-system dimension (`∇F` is `d × d`)."
@@ -121,13 +121,14 @@ struct BatchedSparseCache{Dev,M,P,F}
     nnz::Int
     "Number of problem instances solved together."
     batch_size::Int
-    "Row indices of the shared sparsity pattern (column-major / CSC order)."
+    "Row indices of the shared sparsity pattern (column-major / CSC order). Host-side:
+     used to (re)build the CPU pattern and for introspection, never inside a kernel."
     rows::Vector{Int}
-    "Column indices of the shared sparsity pattern (column-major / CSC order)."
+    "Column indices of the shared sparsity pattern (column-major / CSC order). Host-side."
     cols::Vector{Int}
-    "Indices into `nzval`'s first axis for structurally-present diagonal entries
-     (used by additive `η` regularization)."
-    diag_nz::Vector{Int}
+    "Indices into `nzval`'s first axis for structurally-present diagonal entries (used by
+     additive `η` regularization). Device-resident (read inside `_jacobian_kernel!`)."
+    diag_nz::Dnz
     "Batched Jacobian values: `(nnz × B)`, column `b` is instance `b`'s nonzeros."
     nzval::M
     "CPU: shared-pattern CSC scratch matrix whose nonzeros `factorize!` overwrites per
@@ -154,7 +155,11 @@ function materialize(mcp::PrimalDualMCP, ::BatchedSparse, device; batch_size)
     # Structurally-present diagonal entries (for additive η regularization). Note:
     # a strategy that relies on additive η must ensure the diagonal is fully present
     # in the pattern; internal regularization (η baked into the evaluator) does not.
-    diag_nz = findall(k -> rows[k] == cols[k], eachindex(rows))
+    # Moved onto `device`: `_jacobian_kernel!` iterates this inside the kernel, so it
+    # must be device-resident (a plain Array on CPU, a device array on GPU).
+    diag_nz_host = findall(k -> rows[k] == cols[k], eachindex(rows))
+    diag_nz = KernelAbstractions.allocate(device, Int, length(diag_nz_host))
+    copyto!(diag_nz, diag_nz_host)
 
     nzval = KernelAbstractions.zeros(device, Float64, nnz, batch_size)
 
@@ -232,13 +237,15 @@ end
 # kernel, column `b` (`X[:, b]`, …) is the single instance handed to the per-instance
 # evaluator.
 #
-# NOTE (GPU): these slice per-instance columns with `@views`, which is correct on the
-# CPU backend but not generally allowed inside a GPU kernel; a GPU backend will need a
-# view-free variant (manual column offsets). Likewise `cache.diag_nz` is a host
-# `Vector` here — for a GPU backend it must be device-resident. The trailing
-# `synchronize` is kept for correctness; for GPU it should be hoisted to where the
-# solver actually reads values back to the host (the convergence check), to avoid a
-# stall every Newton iteration. The per-instance evaluators are already kernel-safe.
+# NOTE (GPU): these slice per-instance columns with `@views`. A column slice of a 2D
+# device array is an isbits, allocation-free `SubArray`, so passing it to the
+# per-instance evaluator is expected to be GPU-safe — but this should be confirmed on
+# an actual CUDA device (along with whether the SerialForm evaluator itself compiles
+# for the device — D2). `cache.diag_nz` is now device-resident (built via
+# `KernelAbstractions.allocate` in `materialize`), so the in-kernel loop is valid on
+# GPU. The trailing `synchronize` is kept for correctness; for GPU it should be hoisted
+# to where the solver actually reads values back to the host (the convergence check),
+# to avoid a stall every Newton iteration.
 # ---------------------------------------------------------------------------
 
 @kernel function _residual_kernel!(F, X, Y, S, Θ, ϵ, f!)
