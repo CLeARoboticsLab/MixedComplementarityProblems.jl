@@ -286,3 +286,36 @@ committing the solver to dense batched arrays — is exactly what R1+R3 avoid.
 5. Swap in a GPU `device` and the D1(a) solver; benchmark.
 6. (Later) `SparseSingle` (§8) and/or structured fast path (D1b/D2b/D3).
 ```
+
+---
+
+## 10. CPU multithreading notes (empirical)
+
+`factorize!`/`ldiv!` are threaded across the batch (`Threads.@threads`); each instance
+is an independent sparse solve. Measured on the QP (`n = 30`, `B = 64`) on an M2
+(4 performance + 4 efficiency cores):
+
+| threads | `factorize!` speedup | full-solve speedup |
+|--------:|---------------------:|-------------------:|
+| 1 | 1.0× | 1.0× |
+| 2 | 1.7× | 1.7× |
+| 4 | **2.9×** | **2.1×** |
+| 8 | 1.2× (erratic, 0.9–2.6×) | 0.9× (regression) |
+
+Takeaways (worth surfacing in the eventual PR description):
+
+- **Run with `-t <#performance-cores>` on heterogeneous (Apple-silicon-style) machines.**
+  The efficiency cores add no reliable throughput for this memory-bound work and make
+  the batched `@threads :static` barrier wait on the slowest chunk → run-to-run variance
+  and even regression vs `-t 4`. `:dynamic` scheduling does not fix it.
+- **The scaling ceiling is not Amdahl.** The threaded fraction is ~95% (`factorize!` +
+  `ldiv!` ≈ 2374 of ~2410 µs/iteration). The ~72% parallel efficiency at 4 threads is
+  because UMFPACK numeric factorization is **memory-bound and allocates a fresh numeric
+  factorization every call** (~9.25 MiB/`factorize!` at `B = 64`); concurrent
+  allocation + streaming contend on bandwidth/allocator.
+- **The CPU lever with headroom is KLU `klu_refactor`** (reuses numeric storage in place
+  for a fixed pattern → ~zero per-call allocation), which should speed the single-thread
+  path *and* improve parallel efficiency. Evaluate before committing to it.
+- A homogeneous many-core server should scale better and more predictably than the M2,
+  but UMFPACK's per-call allocation still caps it sub-linearly. The real batched
+  throughput win is the GPU (cuDSS batched, D1a).
