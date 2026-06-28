@@ -135,9 +135,10 @@ struct BatchedSparseCache{Dev,M,P,F,Dnz}
      instance. Other backends: their own sparse structure / symbolic handle. `nothing`
      on backends without a CPU-style solver."
     pattern::P
-    "CPU: vector of per-instance LU factorizations sharing one symbolic ordering (the
-     analyze phase runs once in `materialize`); `factorize!` fills each instance's
-     numeric values. `nothing` on backends without a CPU-style solver."
+    "CPU: vector of per-instance LU factorizations, each with its own symbolic ordering
+     (analyzed once in `materialize`) so `factorize!`/`ldiv!` parallelize across the
+     batch; `factorize!` fills each instance's numeric values. `nothing` on backends
+     without a CPU-style solver."
     factor::F
 end
 
@@ -196,14 +197,21 @@ Returns the device's sparse `pattern` and `factor` workspace, stored verbatim in
 cache and consumed by `factorize!`/`ldiv!`. Dispatched on `device` so GPU backends can
 supply their own (cuDSS, D1 in docs/gpu_kkt_design.md) via a package extension.
 
-CPU backend: a shared-pattern CSC scratch matrix (whose nonzeros `factorize!` overwrites
-per instance) plus per-instance UMFPACK handles that all reuse ONE symbolic ordering.
-`UmfpackLU(template)` builds a skeleton with no factorization; `umfpack_symbolic!` fills
-in only the (value-independent) symbolic — so we never waste a numeric factorization on
-the dummy `ones` matrix. `copy` shares the read-only symbolic and gives each instance its
-own solve workspace; `factorize!` later computes each instance's numeric independently.
-(NB: `umfpack_symbolic!` is a non-exported but long-stable stdlib internal; the all-public
-fallback is `proto = LinearAlgebra.lu(template)`, identical but for one throwaway numeric.)
+CPU backend: a shared-pattern CSC scratch matrix plus per-instance UMFPACK handles, each
+with its OWN symbolic factorization. `UmfpackLU(template)` builds a skeleton with no
+factorization; `umfpack_symbolic!` computes only the (value-independent) symbolic — so we
+never waste a numeric factorization on the dummy `ones` matrix, and `factorize!` later
+fills each instance's numeric.
+
+Why independent symbolics (not one shared symbolic + `copy`)? So `factorize!`/`ldiv!` can
+run concurrently across the batch. UMFPACK's numeric factorization mutates scratch tied to
+the symbolic object, so refactorizing several instances at once against a SHARED symbolic
+corrupts results (verified). Symbolic analysis is pattern-only and one-time, so paying B of
+them up front is cheap relative to the per-Newton-iteration threaded `factorize!` it
+unlocks. (The GPU/cuDSS backend keeps a single shared symbolic — cuDSS does the batched
+numeric factorization with it natively and safely.)
+
+(NB: `umfpack_symbolic!` is a non-exported but long-stable stdlib internal.)
 """
 function _materialize_linsolve(
     ::KernelAbstractions.CPU,
@@ -214,9 +222,16 @@ function _materialize_linsolve(
     batch_size,
 )
     template = SparseArrays.sparse(rows, cols, ones(nnz), d, d)
-    proto = SparseArrays.UMFPACK.UmfpackLU(template)
-    SparseArrays.UMFPACK.umfpack_symbolic!(proto, nothing)
-    (template, [copy(proto) for _ in 1:batch_size])
+    Ti = eltype(SparseArrays.getcolptr(template))
+    factor = Vector{SparseArrays.UMFPACK.UmfpackLU{Float64,Ti}}(undef, batch_size)
+    # Independent symbolic analyses parallelize too (each reads the shared `template`
+    # read-only and writes its own handle).
+    Threads.@threads for b in 1:batch_size
+        f = SparseArrays.UMFPACK.UmfpackLU(template)
+        SparseArrays.UMFPACK.umfpack_symbolic!(f, nothing)
+        factor[b] = f
+    end
+    (template, factor)
 end
 
 function _materialize_linsolve(device, rows, cols, nnz, d, batch_size)
@@ -314,11 +329,12 @@ end
 # This is the correctness baseline for an end-to-end batched solve, NOT the
 # performance path. The GPU batched-sparse solver (D1 in docs/gpu_kkt_design.md) —
 # e.g. cuDSS batched mode reusing one symbolic factorization across the batch — slots
-# in behind these same two verbs. Here we exploit the shared pattern structurally
-# (one CSC template reused as scratch) and the shared symbolic factorization computed
-# once in `materialize`'s analyze phase: every instance's handle reuses that single
-# fill-reducing ordering, so `factorize!` only refreshes the numeric values via `lu!`
-# and never recomputes the ordering in the hot loop.
+# in behind these same two verbs. Each instance owns an independent UMFPACK handle
+# (its own symbolic + numeric + workspace) built in `materialize`'s analyze phase, so
+# `factorize!` only refreshes numeric values and the per-instance work parallelizes
+# across the batch with `Threads.@threads` — UMFPACK numeric factorization is safe to
+# run concurrently across DISTINCT symbolic objects (but not a shared one). `ldiv!` is
+# likewise threaded (independent factors, per-instance workspaces).
 # ---------------------------------------------------------------------------
 
 """
@@ -329,15 +345,14 @@ LU stored in `cache.factor`, reused by `ldiv!`. The CPU method is below; GPU bac
 provide their own (cuDSS, D1) via a package extension.
 """
 function factorize!(cache::BatchedSparseCache{<:KernelAbstractions.CPU})
-    template = cache.pattern
-    nz = SparseArrays.nonzeros(template)
-    for b in 1:cache.batch_size
-        # The shared pattern means `template`'s nonzeros are in the same order as
-        # column `b` of `nzval` (both are CSC order of the same symbolic ∇F).
-        copyto!(nz, view(cache.nzval, :, b))
-        # Numeric-only refactorization, reusing the shared symbolic established by
-        # `materialize`'s analyze phase — no fill-reducing ordering recomputed here.
-        LinearAlgebra.lu!(cache.factor[b], template; check = false)
+    Threads.@threads for b in 1:cache.batch_size
+        # Copy this instance's values into its own factor (column `b` of `nzval` is in
+        # the same CSC order as `factor[b]`'s pattern), then refresh the numeric
+        # factorization in place — reusing the instance's symbolic from the analyze
+        # phase, no fill-reducing ordering recomputed. Independent factors mean this
+        # loop is data-race free across threads.
+        @views copyto!(cache.factor[b].nzval, cache.nzval[:, b])
+        LinearAlgebra.lu!(cache.factor[b]; check = false)
     end
     cache
 end
@@ -358,7 +373,7 @@ Solve `∇F · out = rhs` per instance, reusing the factorizations from `factori
 their own via a package extension.
 """
 function ldiv!(out, cache::BatchedSparseCache{<:KernelAbstractions.CPU}, rhs)
-    for b in 1:cache.batch_size
+    Threads.@threads for b in 1:cache.batch_size
         @views LinearAlgebra.ldiv!(out[:, b], cache.factor[b], rhs[:, b])
     end
     out
@@ -531,7 +546,7 @@ function ldiv!(
     cache::BatchedSparseCache{<:KernelAbstractions.CPU},
     rhs::AbstractArray{<:Any,3},
 )
-    for b in 1:cache.batch_size
+    Threads.@threads for b in 1:cache.batch_size
         @views LinearAlgebra.ldiv!(out[:, :, b], cache.factor[b], rhs[:, :, b])
     end
     out
