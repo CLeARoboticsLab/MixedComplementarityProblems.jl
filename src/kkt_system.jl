@@ -158,28 +158,10 @@ function materialize(mcp::PrimalDualMCP, ::BatchedSparse, device; batch_size)
 
     nzval = KernelAbstractions.zeros(device, Float64, nnz, batch_size)
 
-    # Linear-solve workspace. CPU backend: a shared-pattern CSC template (a scratch
-    # matrix whose nonzeros `factorize!` overwrites per instance) plus a vector of
-    # per-instance LU factorizations. This is the "analyze" phase, mirroring the GPU
-    # cuDSS analyze step: compute the fill-reducing symbolic ordering ONCE for the
-    # shared pattern, then give every instance a handle that reuses that one symbolic.
-    # `UmfpackLU(template)` builds a skeleton with no factorization; `umfpack_symbolic!`
-    # fills in only the (value-independent) symbolic — so we never waste a numeric
-    # factorization on the dummy `ones` matrix. `copy` shares the read-only symbolic and
-    # gives each instance its own solve workspace; `factorize!` later computes each
-    # instance's numeric independently via `lu!`. Other backends defer to their own
-    # solver (D1), so they leave these empty until that solver is implemented.
-    # (NB: `umfpack_symbolic!` is a non-exported but long-stable stdlib internal; the
-    # all-public fallback is `proto = LinearAlgebra.lu(template)`, which works identically
-    # but burns one throwaway numeric factorization on `ones`.)
-    pattern, factor = if device isa KernelAbstractions.CPU
-        template = SparseArrays.sparse(rows, cols, ones(nnz), d, d)
-        proto = SparseArrays.UMFPACK.UmfpackLU(template)
-        SparseArrays.UMFPACK.umfpack_symbolic!(proto, nothing)
-        (template, [copy(proto) for _ in 1:batch_size])
-    else
-        (nothing, nothing)
-    end
+    # Per-device linear-solve workspace (the "analyze" phase). Dispatched on `device`
+    # so a GPU backend (cuDSS, D1 in docs/gpu_kkt_design.md) can supply its own via a
+    # package extension without touching the device-generic assembly above.
+    pattern, factor = _materialize_linsolve(device, rows, cols, nnz, d, batch_size)
 
     BatchedSparseCache(
         device,
@@ -199,6 +181,45 @@ end
 # confusing MethodError.
 function materialize(::PrimalDualMCP, strategy::KKTStrategy, device; batch_size)
     error("`materialize` is not yet implemented for strategy $(typeof(strategy)).")
+end
+
+"""
+    _materialize_linsolve(device, rows, cols, nnz, d, batch_size) -> (pattern, factor)
+
+Build the `BatchedSparse` linear-solve workspace for `device` (the "analyze" phase).
+Returns the device's sparse `pattern` and `factor` workspace, stored verbatim in the
+cache and consumed by `factorize!`/`ldiv!`. Dispatched on `device` so GPU backends can
+supply their own (cuDSS, D1 in docs/gpu_kkt_design.md) via a package extension.
+
+CPU backend: a shared-pattern CSC scratch matrix (whose nonzeros `factorize!` overwrites
+per instance) plus per-instance UMFPACK handles that all reuse ONE symbolic ordering.
+`UmfpackLU(template)` builds a skeleton with no factorization; `umfpack_symbolic!` fills
+in only the (value-independent) symbolic — so we never waste a numeric factorization on
+the dummy `ones` matrix. `copy` shares the read-only symbolic and gives each instance its
+own solve workspace; `factorize!` later computes each instance's numeric independently.
+(NB: `umfpack_symbolic!` is a non-exported but long-stable stdlib internal; the all-public
+fallback is `proto = LinearAlgebra.lu(template)`, identical but for one throwaway numeric.)
+"""
+function _materialize_linsolve(
+    ::KernelAbstractions.CPU,
+    rows,
+    cols,
+    nnz,
+    d,
+    batch_size,
+)
+    template = SparseArrays.sparse(rows, cols, ones(nnz), d, d)
+    proto = SparseArrays.UMFPACK.UmfpackLU(template)
+    SparseArrays.UMFPACK.umfpack_symbolic!(proto, nothing)
+    (template, [copy(proto) for _ in 1:batch_size])
+end
+
+function _materialize_linsolve(device, rows, cols, nnz, d, batch_size)
+    error(
+        "BatchedSparse linear-solve workspace is not implemented for device " *
+        "$(typeof(device)). The GPU (cuDSS) backend loads via a package extension — " *
+        "ensure both CUDA and CUDSS are loaded (see D1 in docs/gpu_kkt_design.md).",
+    )
 end
 
 # ---------------------------------------------------------------------------
@@ -297,13 +318,10 @@ end
     factorize!(cache::BatchedSparseCache)
 
 Factorize each instance's `∇F` (currently held in `cache.nzval`) into a per-instance
-LU stored in `cache.factor`, reused by `ldiv!`. CPU backend only for now.
+LU stored in `cache.factor`, reused by `ldiv!`. The CPU method is below; GPU backends
+provide their own (cuDSS, D1) via a package extension.
 """
-function factorize!(cache::BatchedSparseCache)
-    cache.device isa KernelAbstractions.CPU || error(
-        "factorize! for BatchedSparse is currently implemented only on the CPU " *
-        "backend (the GPU batched-sparse solver is D1 in docs/gpu_kkt_design.md).",
-    )
+function factorize!(cache::BatchedSparseCache{<:KernelAbstractions.CPU})
     template = cache.pattern
     nz = SparseArrays.nonzeros(template)
     for b in 1:cache.batch_size
@@ -317,20 +335,34 @@ function factorize!(cache::BatchedSparseCache)
     cache
 end
 
+function factorize!(cache::BatchedSparseCache)
+    error(
+        "factorize! for BatchedSparse is not implemented for device " *
+        "$(typeof(cache.device)). The GPU (cuDSS) backend loads via a package " *
+        "extension (D1 in docs/gpu_kkt_design.md).",
+    )
+end
+
 """
     ldiv!(out, cache::BatchedSparseCache, rhs)
 
 Solve `∇F · out = rhs` per instance, reusing the factorizations from `factorize!`.
-`out` and `rhs` are `(d × B)` arrays. CPU backend only for now.
+`out` and `rhs` are `(d × B)` arrays. The CPU method is below; GPU backends provide
+their own via a package extension.
 """
-function ldiv!(out, cache::BatchedSparseCache, rhs)
-    cache.device isa KernelAbstractions.CPU || error(
-        "ldiv! for BatchedSparse is currently implemented only on the CPU backend.",
-    )
+function ldiv!(out, cache::BatchedSparseCache{<:KernelAbstractions.CPU}, rhs)
     for b in 1:cache.batch_size
         @views LinearAlgebra.ldiv!(out[:, b], cache.factor[b], rhs[:, b])
     end
     out
+end
+
+function ldiv!(out, cache::BatchedSparseCache, rhs)
+    error(
+        "ldiv! for BatchedSparse is not implemented for device " *
+        "$(typeof(cache.device)). The GPU (cuDSS) backend loads via a package " *
+        "extension (D1 in docs/gpu_kkt_design.md).",
+    )
 end
 
 # ---------------------------------------------------------------------------
@@ -485,19 +517,29 @@ end
 
 "Multi-rhs solve: `out[:,:,b] = ∇F_z[b]⁻¹ rhs[:,:,b]` per instance, reusing the
 factorizations from `factorize!`. `out`/`rhs` are `(d × K × B)` (K right-hand sides;
-batch axis last). CPU backend only for now."
+batch axis last). The CPU method is below; GPU backends provide their own via a
+package extension."
+function ldiv!(
+    out::AbstractArray{<:Any,3},
+    cache::BatchedSparseCache{<:KernelAbstractions.CPU},
+    rhs::AbstractArray{<:Any,3},
+)
+    for b in 1:cache.batch_size
+        @views LinearAlgebra.ldiv!(out[:, :, b], cache.factor[b], rhs[:, :, b])
+    end
+    out
+end
+
 function ldiv!(
     out::AbstractArray{<:Any,3},
     cache::BatchedSparseCache,
     rhs::AbstractArray{<:Any,3},
 )
-    cache.device isa KernelAbstractions.CPU || error(
-        "ldiv! for BatchedSparse is currently implemented only on the CPU backend.",
+    error(
+        "ldiv! for BatchedSparse is not implemented for device " *
+        "$(typeof(cache.device)). The GPU (cuDSS) backend loads via a package " *
+        "extension (D1 in docs/gpu_kkt_design.md).",
     )
-    for b in 1:cache.batch_size
-        @views LinearAlgebra.ldiv!(out[:, :, b], cache.factor[b], rhs[:, :, b])
-    end
-    out
 end
 
 @kernel function _jacobian_θ_kernel!(Jθ, X, Y, S, Θ, ϵ, ∇F_θ!)
