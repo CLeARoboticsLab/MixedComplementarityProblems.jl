@@ -130,10 +130,13 @@ struct BatchedSparseCache{Dev,M,P,F}
     diag_nz::Vector{Int}
     "Batched Jacobian values: `(nnz × B)`, column `b` is instance `b`'s nonzeros."
     nzval::M
-    "Device sparse structure / symbolic-factorization handle; `nothing` until
-     `factorize!` is implemented and populates it."
+    "CPU: shared-pattern CSC scratch matrix whose nonzeros `factorize!` overwrites per
+     instance. Other backends: their own sparse structure / symbolic handle. `nothing`
+     on backends without a CPU-style solver."
     pattern::P
-    "Numeric factorization workspace; `nothing` until `factorize!` populates it."
+    "CPU: vector of per-instance LU factorizations sharing one symbolic ordering (the
+     analyze phase runs once in `materialize`); `factorize!` fills each instance's
+     numeric values. `nothing` on backends without a CPU-style solver."
     factor::F
 end
 
@@ -157,18 +160,22 @@ function materialize(mcp::PrimalDualMCP, ::BatchedSparse, device; batch_size)
 
     # Linear-solve workspace. CPU backend: a shared-pattern CSC template (a scratch
     # matrix whose nonzeros `factorize!` overwrites per instance) plus a vector of
-    # per-instance LU factorizations. Other backends defer to their own solver (D1),
-    # so they leave these empty until that solver is implemented.
+    # per-instance LU factorizations. This is the "analyze" phase, mirroring the GPU
+    # cuDSS analyze step: compute the fill-reducing symbolic ordering ONCE for the
+    # shared pattern, then give every instance a handle that reuses that one symbolic.
+    # `UmfpackLU(template)` builds a skeleton with no factorization; `umfpack_symbolic!`
+    # fills in only the (value-independent) symbolic — so we never waste a numeric
+    # factorization on the dummy `ones` matrix. `copy` shares the read-only symbolic and
+    # gives each instance its own solve workspace; `factorize!` later computes each
+    # instance's numeric independently via `lu!`. Other backends defer to their own
+    # solver (D1), so they leave these empty until that solver is implemented.
+    # (NB: `umfpack_symbolic!` is a non-exported but long-stable stdlib internal; the
+    # all-public fallback is `proto = LinearAlgebra.lu(template)`, which works identically
+    # but burns one throwaway numeric factorization on `ones`.)
     pattern, factor = if device isa KernelAbstractions.CPU
         template = SparseArrays.sparse(rows, cols, ones(nnz), d, d)
-        # Compute the symbolic factorization (fill-reducing ordering / pivoting) ONCE,
-        # then make B independent copies. `factorize!` refreshes only numeric values
-        # via `lu!`, never recomputing the symbolic in the solver's hot loop.
-        # `copy(::UmfpackLU)` is a safe deep copy (independent C handles) and far
-        # cheaper than recomputing symbolic per instance — measured ~23× faster at
-        # B=200, n=300. (NB: `fill` would be WRONG — it aliases one object across all
-        # B slots. The GPU path, cuDSS/D1, shares one symbolic across the batch.)
-        proto = LinearAlgebra.lu(template; check = false)
+        proto = SparseArrays.UMFPACK.UmfpackLU(template)
+        SparseArrays.UMFPACK.umfpack_symbolic!(proto, nothing)
         (template, [copy(proto) for _ in 1:batch_size])
     else
         (nothing, nothing)
@@ -280,8 +287,10 @@ end
 # performance path. The GPU batched-sparse solver (D1 in docs/gpu_kkt_design.md) —
 # e.g. cuDSS batched mode reusing one symbolic factorization across the batch — slots
 # in behind these same two verbs. Here we exploit the shared pattern structurally
-# (one CSC template reused as scratch) but still recompute the symbolic ordering per
-# instance; symbolic reuse (lu!/KLU) is a future CPU optimization.
+# (one CSC template reused as scratch) and the shared symbolic factorization computed
+# once in `materialize`'s analyze phase: every instance's handle reuses that single
+# fill-reducing ordering, so `factorize!` only refreshes the numeric values via `lu!`
+# and never recomputes the ordering in the hot loop.
 # ---------------------------------------------------------------------------
 
 """
@@ -301,8 +310,8 @@ function factorize!(cache::BatchedSparseCache)
         # The shared pattern means `template`'s nonzeros are in the same order as
         # column `b` of `nzval` (both are CSC order of the same symbolic ∇F).
         copyto!(nz, view(cache.nzval, :, b))
-        # Numeric-only refactorization: reuses the symbolic established at
-        # `materialize`, no fill-reducing ordering recomputed here.
+        # Numeric-only refactorization, reusing the shared symbolic established by
+        # `materialize`'s analyze phase — no fill-reducing ordering recomputed here.
         LinearAlgebra.lu!(cache.factor[b], template; check = false)
     end
     cache
