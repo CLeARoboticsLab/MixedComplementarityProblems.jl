@@ -18,8 +18,17 @@ SymbolicTracingUtils = "77ddf47f-b2ab-4ded-95ee-54f4fa148129"
 TrajectoryGamesBase = "ac1ac542-73eb-4349-ae1b-660ab3609574"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
+[weakdeps]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+CUDSS = "45b445bb-4962-46a0-9369-b4df9d0f772e"
+
+[extensions]
+MixedComplementarityProblemsCUDSSExt = ["CUDA", "CUDSS"]
+
 [compat]
 BlockArrays = "0.16.43, 1"
+CUDA = "5"
+CUDSS = "0.6, 0.7, 0.8"
 ChainRulesCore = "1.25.0"
 DataStructures = "0.18.20"
 FiniteDiff = "2.26.2"
