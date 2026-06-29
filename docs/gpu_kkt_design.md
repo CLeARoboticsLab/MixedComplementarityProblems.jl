@@ -289,33 +289,34 @@ committing the solver to dense batched arrays — is exactly what R1+R3 avoid.
 
 ---
 
-## 10. CPU multithreading notes (empirical)
+## 10. CPU linear-solver + multithreading notes (empirical)
 
-`factorize!`/`ldiv!` are threaded across the batch (`Threads.@threads`); each instance
-is an independent sparse solve. Measured on the QP (`n = 30`, `B = 64`) on an M2
-(4 performance + 4 efficiency cores):
+The CPU `BatchedSparse` backend is **KLU** (`klu_refactor`), threaded across the batch
+(`Threads.@threads`); each instance is an independent sparse solve. The history is worth
+keeping because it shaped the design:
 
-| threads | `factorize!` speedup | full-solve speedup |
-|--------:|---------------------:|-------------------:|
-| 1 | 1.0× | 1.0× |
-| 2 | 1.7× | 1.7× |
-| 4 | **2.9×** | **2.1×** |
-| 8 | 1.2× (erratic, 0.9–2.6×) | 0.9× (regression) |
+**Why KLU, not UMFPACK.** UMFPACK's `lu!` allocates a fresh numeric factorization every
+call (~9.25 MiB per `factorize!` at `B = 64`), making the per-Newton-iteration hot loop
+memory-bound — concurrent allocation + streaming contended on bandwidth/allocator, so
+threaded scaling stalled at ~2.9× on 4 threads and the threaded fraction (~95%) couldn't
+be cashed in. KLU's `klu_refactor` reuses numeric storage **and** the pivot ordering in
+place → allocation-free and ~5× faster per refactor. Net measured win (full solve) over
+the old UMFPACK path: **4.6–8.2× single-threaded**, **~9–14× at 4 threads** vs UMFPACK
+serial. Each instance keeps an independent KLU factorization (thread-safe); the first
+`factorize!` does a full `klu` from real values (for good pivots), later calls refactor.
+Refactor reuses iteration-1 pivots — verified accurate vs fresh re-pivoting through
+s⊙y ≈ 1e-4, past `tol`, so it holds as the KKT system tightens to the boundary.
 
-Takeaways (worth surfacing in the eventual PR description):
+**Thread count on heterogeneous (Apple-silicon-style) machines.** Still prefer
+`-t <#performance-cores>` (e.g. `-t 4` on the M2's 4P+4E). The efficiency cores add no
+useful throughput for this bandwidth-bound work and make the `@threads :static` barrier
+wait on the slowest chunk; `:dynamic` does not fix it. With UMFPACK, `-t 8` actively
+*regressed* (allocation contention, 0.9× erratic); with KLU's allocation-free refactor
+that regression is gone — `-t 8` simply plateaus at ~`-t 4` throughput rather than
+helping. So 4 threads remains the sweet spot here, ~2× full-solve over single-threaded.
 
-- **Run with `-t <#performance-cores>` on heterogeneous (Apple-silicon-style) machines.**
-  The efficiency cores add no reliable throughput for this memory-bound work and make
-  the batched `@threads :static` barrier wait on the slowest chunk → run-to-run variance
-  and even regression vs `-t 4`. `:dynamic` scheduling does not fix it.
-- **The scaling ceiling is not Amdahl.** The threaded fraction is ~95% (`factorize!` +
-  `ldiv!` ≈ 2374 of ~2410 µs/iteration). The ~72% parallel efficiency at 4 threads is
-  because UMFPACK numeric factorization is **memory-bound and allocates a fresh numeric
-  factorization every call** (~9.25 MiB/`factorize!` at `B = 64`); concurrent
-  allocation + streaming contend on bandwidth/allocator.
-- **The CPU lever with headroom is KLU `klu_refactor`** (reuses numeric storage in place
-  for a fixed pattern → ~zero per-call allocation), which should speed the single-thread
-  path *and* improve parallel efficiency. Evaluate before committing to it.
-- A homogeneous many-core server should scale better and more predictably than the M2,
-  but UMFPACK's per-call allocation still caps it sub-linearly. The real batched
-  throughput win is the GPU (cuDSS batched, D1a).
+**Outlook.** A homogeneous many-core server should thread better and more predictably.
+KLU is sparse-direct: the QP benchmark above has a *dense* `M` block (worst case for KLU,
+edge narrows by `n = 100`); genuinely sparse 1–2k targets (block-tridiagonal trajectory
+games) should favor it more — worth confirming at target size/structure. The real batched
+throughput win remains the GPU (cuDSS batched, D1a).
