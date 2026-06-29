@@ -12,7 +12,7 @@ using KLU: KLU
 
 include("mcp.jl")
 include("solver.jl")
-include("kkt_system.jl")
+include("batched_solver.jl")
 include("game.jl")
 include("AutoDiff.jl")
 

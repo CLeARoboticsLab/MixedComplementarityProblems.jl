@@ -10,7 +10,7 @@ using Zygote: Zygote
 using Random: Random
 
 @testset "BatchedMCP" begin
-    """ Batched/GPU KKTSystem layer + BatchedInteriorPoint solver, exercised on the
+    """ Batched solver layer + BatchedInteriorPoint solver, exercised on the
     KernelAbstractions CPU backend, on the QP
                        min_x 0.5 xᵀ M x - θᵀ x  s.t.  A x - b ≥ 0.
     """

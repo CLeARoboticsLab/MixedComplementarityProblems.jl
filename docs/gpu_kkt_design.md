@@ -1,4 +1,4 @@
-# GPU MCP solver — `KKTSystem` interface & abstraction boundary (DRAFT)
+# GPU MCP solver — batched-solve interface & abstraction boundary (DRAFT)
 
 Status: **draft for review**. Goal of this doc: pin down *one* abstraction boundary
 so that the interior-point solver is written **once**, and "batched-many-small",
@@ -26,7 +26,7 @@ backends* rather than separate code paths.
                                   │ materialize(mcp, strategy, device; B)
                                   ▼
  ┌─────────────────────────────────────────────────────────────┐
- │ KKTCache  (owns the numeric ∇F representation + factorization) │  ← the ONLY thing
+ │ cache     (owns the numeric ∇F representation + factorization) │  ← the ONLY thing
  │   strategy ∈ {BatchedDense, BatchedSparse, SparseSingle}       │     that differs
  │   device   ∈ KA backend {CPU(), CUDABackend(), MetalBackend()} │     across regimes
  └───────────────────────────────┬─────────────────────────────┘
@@ -44,7 +44,7 @@ Two **orthogonal** axes (don't conflate them):
 | Axis | What it controls | Values |
 |------|------------------|--------|
 | `device` (a KernelAbstractions backend) | array type, where kernels run | `CPU()`, `CUDABackend()`, `MetalBackend()`, … |
-| `strategy` (`KKTStrategy`) | Jacobian representation + linear solver | `BatchedDense`, `BatchedSparse`, `SparseSingle` |
+| `strategy` (`BatchedSolveStrategy`) | Jacobian representation + linear solver | `BatchedDense`, `BatchedSparse`, `SparseSingle` |
 
 ---
 
@@ -70,14 +70,14 @@ invariant is what makes the three regimes interchangeable.
 
 ```julia
 # --- strategy: numeric representation of ∇F + its linear solver -------------
-abstract type KKTStrategy end
+abstract type BatchedSolveStrategy end
 
-struct BatchedDense  <: KKTStrategy end   # ∇F as (d×d×B) dense; batched LU.
+struct BatchedDense  <: BatchedSolveStrategy end   # ∇F as (d×d×B) dense; batched LU.
                                           #   Good ONLY for small d (≲ few hundred).
-struct BatchedSparse <: KKTStrategy end   # shared (rows,cols) + (nnz×B) values;
+struct BatchedSparse <: BatchedSolveStrategy end   # shared (rows,cols) + (nnz×B) values;
                                           #   batched sparse / structured solve.
                                           #   ← the 1–2k regime.
-struct SparseSingle  <: KKTStrategy end   # B=1, single (d×d) sparse; direct/iterative.
+struct SparseSingle  <: BatchedSolveStrategy end   # B=1, single (d×d) sparse; direct/iterative.
                                           #   ← FUTURE large-problem door. Same verbs.
 
 # --- cache: per-(mcp, strategy, device, B) preallocated workspace -----------
@@ -100,7 +100,7 @@ end
 ```julia
 """Build a workspace to solve `B` instances of `mcp` with `strategy` on `device`.
 Computes the shared sparsity pattern once, allocates all device buffers."""
-materialize(mcp::PrimalDualMCP, strategy::KKTStrategy, device; batch_size) :: KKTCache
+materialize(mcp::PrimalDualMCP, strategy::BatchedSolveStrategy, device; batch_size) -> cache  # strategy-specific (e.g. BatchedSparseCache)
 
 # Naming convention: UPPERCASE Latin = batched (·×B) arrays (X, Y, S, Θ, F);
 # lowercase Greek ϵ, η = per-instance length-B vectors.
@@ -265,7 +265,7 @@ but worth confirming the dependency direction.)*
 
 ## 8. How the large-problem door stays open (concrete)
 
-`SparseSingle` is a `KKTStrategy` with `B = 1` that implements the *same four
+`SparseSingle` is a `BatchedSolveStrategy` with `B = 1` that implements the *same four
 verbs*: `materialize` builds one `d×d` sparse system; `jacobian!` fills its
 `nnz` (the existing evaluator, B=1); `factorize!` calls cuDSS / GMRES+precond;
 `ldiv!` does one solve. **The §5 loop is unchanged.** The only large-specific work
@@ -277,7 +277,7 @@ committing the solver to dense batched arrays — is exactly what R1+R3 avoid.
 
 ## 9. Proposed build order
 
-1. `KKTStrategy` types + verb signatures + `BatchedSparse` cache struct (this doc → stubs).
+1. `BatchedSolveStrategy` types + verb signatures + `BatchedSparse` cache struct (this doc → stubs).
 2. `materialize` + `jacobian!`/`residual!` on KA CPU backend (extends the prototype).
 3. `factorize!`/`ldiv!` for `BatchedSparse` — **CPU first** (per-instance sparse LU
    loop) to get a correct end-to-end batched solve, before any GPU solver choice (D1).

@@ -41,7 +41,7 @@ Batched cuDSS:
 Other notes:
   • Hoist `KernelAbstractions.synchronize` out of residual!/jacobian! for GPU (it
     currently stalls every iteration); sync only where the solver reads back to host
-    (the convergence check). See the NOTE in src/kkt_system.jl.
+    (the convergence check). See the NOTE in src/batched_solver.jl.
   • The cache's `pattern`/`factor` fields are untyped (P, F), so the GPU cache can hold
     a CudssSolver + CSR buffers + `perm` here without changing the struct.
 ────────────────────────────────────────────────────────────────────────────────────

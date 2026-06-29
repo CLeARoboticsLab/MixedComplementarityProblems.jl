@@ -1,16 +1,16 @@
-""" KKTSystem layer (GPU/batched solver).
+""" Batched solver layer (CPU-multithreaded, GPU-ready).
 
 This file defines the abstraction boundary described in `docs/gpu_kkt_design.md`.
 The interior-point solver is written ONCE against a small verb set
 `{residual!, jacobian!, factorize!, ldiv!}` plus generic batched array ops.
 Everything regime-specific — the numeric representation of `∇F`, the device, and
-the linear-solve algorithm — lives behind those verbs in a `KKTStrategy` and its
+the linear-solve algorithm — lives behind those verbs in a `BatchedSolveStrategy` and its
 associated cache.
 
 Two orthogonal axes:
   - `device`  : a KernelAbstractions backend (`CPU()`, `CUDABackend()`, …) that
                 determines array type and where kernels run.
-  - `strategy`: a `KKTStrategy` that determines the `∇F` representation and the
+  - `strategy`: a `BatchedSolveStrategy` that determines the `∇F` representation and the
                 linear solver used for it.
 
 Invariant: `F` and the Newton step `δz` are plain `(d × B)` device arrays owned by
@@ -23,22 +23,22 @@ single invariant is what makes the strategies interchangeable.
 # ---------------------------------------------------------------------------
 
 "Numeric representation of `∇F` + the linear solver used for it. See `docs/gpu_kkt_design.md`."
-abstract type KKTStrategy end
+abstract type BatchedSolveStrategy end
 
 "`∇F` as a dense `(d × d × B)` array, solved by batched dense LU. Viable ONLY for
 small per-instance dimension `d` (≲ a few hundred) — beyond that, register
 pressure and `O(d³)`/memory make it infeasible. [not yet implemented]"
-struct BatchedDense <: KKTStrategy end
+struct BatchedDense <: BatchedSolveStrategy end
 
 "`∇F` as ONE shared sparsity pattern `(rows, cols)` plus an `(nnz × B)` value
 matrix (each instance fills its own column), solved by a batched-sparse / structured
 solver. This is the target for the medium-and-sparse batched regime (≈1–2k vars)."
-struct BatchedSparse <: KKTStrategy end
+struct BatchedSparse <: BatchedSolveStrategy end
 
 "`∇F` as a single `(d × d)` sparse matrix (`B = 1`), solved by a sparse direct or
 preconditioned iterative method. The route to single large problems: it implements
 the SAME verbs, so the solver loop is unchanged. [not yet implemented]"
-struct SparseSingle <: KKTStrategy end
+struct SparseSingle <: BatchedSolveStrategy end
 
 # ---------------------------------------------------------------------------
 # Verb set (the entire interface the solver depends on).
@@ -46,7 +46,7 @@ struct SparseSingle <: KKTStrategy end
 # ---------------------------------------------------------------------------
 
 """
-    materialize(mcp::PrimalDualMCP, strategy::KKTStrategy, device; batch_size) -> cache
+    materialize(mcp::PrimalDualMCP, strategy::BatchedSolveStrategy, device; batch_size) -> cache
 
 Build a preallocated workspace to solve `batch_size` instances of `mcp` with
 `strategy` on `device`. Computes the shared sparsity pattern once and allocates all
@@ -185,7 +185,7 @@ end
 
 # Fallback so unimplemented strategies fail with a clear message rather than a
 # confusing MethodError.
-function materialize(::PrimalDualMCP, strategy::KKTStrategy, device; batch_size)
+function materialize(::PrimalDualMCP, strategy::BatchedSolveStrategy, device; batch_size)
     error("`materialize` is not yet implemented for strategy $(typeof(strategy)).")
 end
 
@@ -439,7 +439,7 @@ function solve(
     ::BatchedInteriorPoint,
     mcp::PrimalDualMCP,
     Θ::AbstractMatrix;
-    strategy::KKTStrategy = BatchedSparse(),
+    strategy::BatchedSolveStrategy = BatchedSparse(),
     device = KernelAbstractions.CPU(),
     X₀ = nothing,
     Y₀ = nothing,
@@ -610,7 +610,7 @@ function solve_jacobian_θ(
     S,
     Θ,
     ϵ;
-    strategy::KKTStrategy = BatchedSparse(),
+    strategy::BatchedSolveStrategy = BatchedSparse(),
     device = KernelAbstractions.CPU(),
 )
     isnothing(mcp.∇F_θ_kernel) && error(
