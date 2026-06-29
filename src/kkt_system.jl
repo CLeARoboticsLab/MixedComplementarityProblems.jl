@@ -480,13 +480,22 @@ function solve(
     residual!(F, mcp, X, Y, S, Θ, ϵ; device)
     kkt = vec(maximum(abs, F; dims = 1))
 
+    # Per-instance inner-step count feeding the ϵ/η schedule. It MUST be per-instance,
+    # not a shared scalar: the tightening factor `1 - exp(-rate·count)` depends on how
+    # many inner Newton steps THIS instance needed to sub-converge. A shared count would
+    # be pinned at `max_inner_iters` by the hardest/straggler instances, slowing the
+    # schedule for everyone so that already-converged instances never tighten ϵ to `tol`
+    # within `max_outer_iters` (they'd be wrongly reported `:failed`).
+    inner_count = KernelAbstractions.zeros(device, Float64, B)
+
     outer = 0
     total = 0
     while !all(done) && outer < max_outer_iters
-        # `inner` starts at 1 (matching the unbatched solver): the tightening factor
-        # `1 - exp(-rate·inner)` must never be evaluated at inner = 0, which would
-        # zero out ϵ when a subproblem is already converged at entry.
+        # Each instance's count starts at 1 (matching the unbatched solver): the factor
+        # `1 - exp(-rate·count)` must never be evaluated at count = 0, which would zero
+        # out ϵ when a subproblem is already converged at entry.
         inner = 1
+        inner_count .= 1
         while any((kkt .> ϵ) .& .!done) && inner < max_inner_iters
             jacobian!(cache, mcp, X, Y, S, Θ, ϵ, η; device)
             factorize!(cache)
@@ -503,6 +512,11 @@ function solve(
             S .+= reshape(α_s, 1, :) .* δs
             Y .+= reshape(α_y, 1, :) .* δy
 
+            # Count this inner step only for instances that actually stepped; once an
+            # instance sub-converges it stops stepping and its count freezes here until
+            # the next outer round resets it.
+            inner_count .+= stepping
+
             total += 1
             inner += 1
             residual!(F, mcp, X, Y, S, Θ, ϵ; device)
@@ -510,11 +524,13 @@ function solve(
         end
 
         # Outer update, per instance: tighten ϵ/η where the subproblem converged,
-        # loosen where it didn't; mark instances done once converged at ϵ ≤ tol.
+        # loosen where it didn't; mark instances done once converged at ϵ ≤ tol. Each
+        # instance uses ITS OWN inner-step count, so a converged instance tightens toward
+        # tol on its own schedule regardless of stragglers sharing the batch.
         subconverged = kkt .≤ ϵ
         done .= done .| (subconverged .& (ϵ .≤ tol))
-        tighten = 1 - exp(-tightening_rate * inner)
-        loosen = 1 + exp(-loosening_rate * inner)
+        tighten = @. 1 - exp(-tightening_rate * inner_count)
+        loosen = @. 1 + exp(-loosening_rate * inner_count)
         working = .!done
         @. ϵ = ifelse(working, ifelse(subconverged, ϵ * tighten, ϵ * loosen), ϵ)
         @. η = ifelse(working, ifelse(subconverged, η * tighten, η * loosen), η)

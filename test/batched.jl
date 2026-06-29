@@ -127,6 +127,54 @@ using Random: Random
         end
     end
 
+    @testset "BatchedInteriorPoint is robust to heterogeneous batches" begin
+        # Regression test: the per-instance ϵ/η schedule must not be slowed by hard /
+        # infeasible stragglers sharing the batch. A general-A QP admits both feasible
+        # and infeasible instances; every instance the unbatched solver can solve must
+        # also be marked `:solved` in the mixed batch (a shared inner-step count would
+        # leave converged instances stuck above `tol` and wrongly reported `:failed`).
+        nq = 4
+        Kq(z; θ) = let
+            xq = z[1:nq]
+            yq = z[(nq + 1):end]
+            Mq = reshape(θ[1:nq^2], nq, nq)
+            Aq = reshape(θ[(nq^2 + 1):(2nq^2)], nq, nq)
+            bq = θ[(2nq^2 + 1):(2nq^2 + nq)]
+            ϕq = θ[(2nq^2 + nq + 1):end]
+            [Mq * xq - ϕq - transpose(Aq) * yq; Aq * xq - bq]
+        end
+        mcpq = MCP.PrimalDualMCP(
+            Kq,
+            [fill(-Inf, nq); fill(0.0, nq)],
+            fill(Inf, 2nq);
+            parameter_dimension = 2nq^2 + 2nq,
+            compute_kernel_evaluators = true,
+        )
+
+        Random.seed!(7)
+        Bq = 32
+        Θq = reduce(
+            hcat,
+            map(1:Bq) do _
+                P = randn(nq, nq)
+                Mq = P'P + nq * I              # SPD ⇒ convex
+                Aq = randn(nq, nq) .* (rand(nq, nq) .< 0.5)
+                [vec(Mq); vec(Aq); randn(nq); randn(nq)]   # random b ⇒ some infeasible
+            end,
+        )
+
+        # Ground truth: which instances are solvable (per the unbatched solver).
+        unb_solved = [
+            MCP.solve(MCP.InteriorPoint(), mcpq, Θq[:, b]; tol = 1e-6).status == :solved
+            for b in 1:Bq
+        ]
+        @test 0 < count(unb_solved) < Bq         # the batch is genuinely heterogeneous
+
+        # Every unbatched-solvable instance is solved in the mixed batch too.
+        bat = MCP.solve(MCP.BatchedInteriorPoint(), mcpq, Θq; device = dev, tol = 1e-4)
+        @test all(bat.status[b] == :solved for b in 1:Bq if unb_solved[b])
+    end
+
     @testset "solve_jacobian_θ matches unbatched sensitivities" begin
         # Converge each instance (unbatched) and collect the primal-dual point + ϵ.
         X = zeros(n, B)
@@ -162,8 +210,12 @@ using Random: Random
 
     @testset "BatchedInteriorPoint is differentiable through the batch" begin
         # Scalar loss over a whole batch of solves; gradient is wrt the (nθ × B) Θ.
+        # Solve to a tight tol: the finite-difference comparison is limited by the solve
+        # accuracy (the gradient is evaluated at the IP-converged iterate), so a loose
+        # tol would leave the FD residual right at the test threshold.
         loss =
-            Θ -> let sol = MCP.solve(MCP.BatchedInteriorPoint(), mcp, Θ; device = dev)
+            Θ -> let sol =
+                    MCP.solve(MCP.BatchedInteriorPoint(), mcp, Θ; device = dev, tol = 1e-6)
                 sum(sol.x .^ 2) + sum(sol.y .^ 2)
             end
 
