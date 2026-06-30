@@ -170,18 +170,21 @@ function solve(
     (; status, x, y, s, kkt_error, ϵ, outer_iters, total_iters)
 end
 
-"""Helper function to compute the step size `α` which solves:
+"""Helper function to compute, in closed form, the largest step size `α` which solves:
                    α* = max(α ∈ [0, 1] : v + α δ ≥ (1 - τ) v).
+The constraint binds only on coordinates where `δ[j] < 0`, and there it is linear in `α`,
+so the exact maximizer is
+                   α* = min(1, min_{j : δ[j] < 0} -τ v[j] / δ[j]).
+This is exact (no backtracking). Returns `NaN` when the step is forced below `tol`, which
+the caller treats as a stalled/failed iteration.
 """
-function fraction_to_the_boundary_linesearch(v, δ; τ = 0.995, decay = 0.5, tol = 1e-4)
-    α = 1.0
-    while any(@. v + α * δ < (1 - τ) * v)
-        if α < tol
-            return NaN
+function fraction_to_the_boundary_linesearch(v, δ; τ = 0.995, tol = 1e-4)
+    α = one(promote_type(eltype(v), eltype(δ)))
+    for j in eachindex(v, δ)
+        @inbounds if δ[j] < 0
+            α = min(α, -τ * v[j] / δ[j])
         end
-
-        α *= decay
     end
 
-    α
+    α < tol ? oftype(α, NaN) : α
 end
