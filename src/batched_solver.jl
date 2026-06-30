@@ -278,37 +278,64 @@ function residual!(F, mcp::PrimalDualMCP, X, Y, S, Θ, ϵ; device)
     F
 end
 
-@kernel function _jacobian_kernel!(V, X, Y, S, Θ, ϵ, ∇f!, diag_nz, η)
+@kernel function _jacobian_kernel!(V, X, Y, S, Θ, ϵ, ∇f!, diag_nz, η, regularization)
     b = @index(Global)
-    @views ∇f!(V[:, b], X[:, b], Y[:, b], S[:, b], Θ[:, b], ϵ[b])
-    # Fused additive regularization: each thread adds its own η[b] to the
-    # structurally-present diagonal entries of its column, in the same per-instance
-    # parallel pass (before any synchronization).
-    @inbounds for k in diag_nz
-        V[k, b] += η[b]
+    # `regularization` is a `Val(:internal | :identity | :none)`, so each branch is a
+    # compile-time constant (and the kernel stays GPU-safe — a bare Symbol is not isbits
+    # and cannot be passed to a GPU kernel). `:internal` feeds η to the evaluator (η is
+    # baked into ∇F_z); otherwise the evaluator sees η = 0.
+    η_eval = regularization === Val(:internal) ? η[b] : zero(eltype(η))
+    @views ∇f!(V[:, b], X[:, b], Y[:, b], S[:, b], Θ[:, b], ϵ[b], η_eval)
+    # `:identity` adds η[b] to the structurally-present diagonal entries of this
+    # instance's column, in the same per-instance parallel pass.
+    if regularization === Val(:identity)
+        @inbounds for k in diag_nz
+            V[k, b] += η[b]
+        end
     end
 end
 
 """
-    jacobian!(cache, mcp, X, Y, S, Θ, ϵ, η; device)
+    jacobian!(cache, mcp, X, Y, S, Θ, ϵ, η; device, regularize_linear_solve = :identity)
 
 Assemble the batched `∇F` into `cache.nzval` (`(nnz × B)`, each column an instance's
-nonzero values in the shared pattern's order) one instance per thread, adding the
-per-instance regularization `η` (a length-`B` vector) to the structurally-present
-diagonal entries within the same kernel.
-
-NOTE: only the diagonal slots in `cache.diag_nz` are reachable additively; patterns
-with missing diagonals need augmentation for full identity regularization (internal-η
-regularization, baked into the evaluator, is the planned alternative — not yet
-supported for kernel evaluators).
+nonzero values in the shared pattern's order), one instance per thread. The
+regularization scheme (mirroring the unbatched `solve`) determines how the per-instance
+`η` (a length-`B` vector) enters:
+  - `:internal` — η is passed to the evaluator (it is baked into `∇F_z`, as for games);
+  - `:identity` — η is added to the structurally-present diagonal entries (the evaluator
+    sees η = 0). Only diagonals in `cache.diag_nz` are reachable this way; patterns with
+    missing diagonals (e.g. the H − s block) need internal regularization for full
+    coverage.
+  - `:none` — no regularization.
 """
-function jacobian!(cache::BatchedSparseCache, mcp::PrimalDualMCP, X, Y, S, Θ, ϵ, η; device)
+function jacobian!(
+    cache::BatchedSparseCache,
+    mcp::PrimalDualMCP,
+    X,
+    Y,
+    S,
+    Θ,
+    ϵ,
+    η;
+    device,
+    regularize_linear_solve::Symbol = :identity,
+)
     isnothing(mcp.∇F_z_kernel) && error(
         "This MCP has no kernel Jacobian evaluator. Construct it with " *
         "`compute_kernel_evaluators = true`.",
     )
     _jacobian_kernel!(device)(
-        cache.nzval, X, Y, S, Θ, ϵ, mcp.∇F_z_kernel, cache.diag_nz, η;
+        cache.nzval,
+        X,
+        Y,
+        S,
+        Θ,
+        ϵ,
+        mcp.∇F_z_kernel,
+        cache.diag_nz,
+        η,
+        Val(regularize_linear_solve);
         ndrange = cache.batch_size,
     )
     KernelAbstractions.synchronize(device)
@@ -450,6 +477,7 @@ function solve(
     max_outer_iters = 50,
     tightening_rate = 0.1,
     loosening_rate = 0.5,
+    regularize_linear_solve::Symbol = :identity,
 )
     nx = mcp.unconstrained_dimension
     ny = mcp.constrained_dimension
@@ -497,7 +525,7 @@ function solve(
         inner = 1
         inner_count .= 1
         while any((kkt .> ϵ) .& .!done) && inner < max_inner_iters
-            jacobian!(cache, mcp, X, Y, S, Θ, ϵ, η; device)
+            jacobian!(cache, mcp, X, Y, S, Θ, ϵ, η; device, regularize_linear_solve)
             factorize!(cache)
             ldiv!(δz, cache, -F)
 
@@ -625,8 +653,20 @@ function solve_jacobian_θ(
 
     cache = materialize(mcp, strategy, device; batch_size = B)
 
-    # ∇F_z at the (converged) point, unregularized (η = 0), then factorize.
-    jacobian!(cache, mcp, X, Y, S, Θ, ϵ, KernelAbstractions.zeros(device, Float64, B); device)
+    # ∇F_z at the (converged) point, unregularized (the true Jacobian — sensitivities
+    # need ∂F/∂z, not the regularized Newton matrix), then factorize.
+    jacobian!(
+        cache,
+        mcp,
+        X,
+        Y,
+        S,
+        Θ,
+        ϵ,
+        KernelAbstractions.zeros(device, Float64, B);
+        device,
+        regularize_linear_solve = :none,
+    )
     factorize!(cache)
 
     # Right-hand side -∇F_θ as a dense (d × nθ × B) multi-rhs.

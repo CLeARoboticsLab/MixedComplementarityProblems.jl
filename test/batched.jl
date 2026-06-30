@@ -175,6 +175,49 @@ using Random: Random
         @test all(bat.status[b] == :solved for b in 1:Bq if unb_solved[b])
     end
 
+    @testset "BatchedInteriorPoint supports :internal regularization" begin
+        # Internally-regularized MCP: η is embedded in the stationarity rows (Tikhonov
+        # η·x), exactly as games do via game_to_mcp. With `regularize_linear_solve =
+        # :internal` the batched solver must thread η into ∇F_z through the kernel
+        # evaluator (and skip the additive diagonal step — no double-count).
+        stu = MCP.SymbolicTracingUtils
+        backend = stu.SymbolicsBackend()
+        x_sym = stu.make_variables(backend, :x, n)
+        y_sym = stu.make_variables(backend, :y, m)
+        θ_sym = stu.make_variables(backend, :θ, n)
+        η_sym = only(stu.make_variables(backend, :η, 1))
+        G_sym = (M * x_sym - θ_sym - transpose(A) * y_sym) + η_sym .* x_sym
+        H_sym = A * x_sym - b
+        mcp_reg = MCP.PrimalDualMCP(
+            G_sym, H_sym, x_sym, y_sym, θ_sym, η_sym;
+            compute_kernel_evaluators = true,
+        )
+
+        # Assembly: jacobian!(:internal) reproduces the unbatched η-regularized ∇F_z (the
+        # evaluator applies η; the additive diagonal step is skipped, so no double-count).
+        # Evaluated at the first batch instance (X/Y/S/Θ/ϵ from the top of the testset).
+        η_reg = 0.5
+        cache = MCP.materialize(mcp_reg, MCP.BatchedSparse(), dev; batch_size = B)
+        MCP.jacobian!(
+            cache, mcp_reg, X, Y, S, Θ, ϵ, fill(η_reg, B);
+            device = dev, regularize_linear_solve = :internal,
+        )
+        Jbuf = mcp_reg.∇F_z!.result_buffer
+        mcp_reg.∇F_z!(Jbuf, X[:, 1], Y[:, 1], S[:, 1]; θ = Θ[:, 1], ϵ = ϵ[1], η = η_reg)
+        @test nonzeros(Jbuf) ≈ cache.nzval[:, 1]
+
+        # End-to-end: the :internal solve converges to the (unregularized) QP solution
+        # as η → 0, matching the unbatched solver on the same parameter (Θ's 1st column).
+        bat = MCP.solve(
+            MCP.BatchedInteriorPoint(), mcp_reg, Θ[:, 1:1];
+            device = dev, regularize_linear_solve = :internal,
+        )
+        unb = MCP.solve(MCP.InteriorPoint(), mcp, Θ[:, 1])
+        @test bat.status[1] == :solved
+        @test isapprox(bat.x[:, 1], unb.x; atol = 1e-3)
+        @test isapprox(bat.y[:, 1], unb.y; atol = 1e-3)
+    end
+
     @testset "solve_jacobian_θ matches unbatched sensitivities" begin
         # Converge each instance (unbatched) and collect the primal-dual point + ϵ.
         X = zeros(n, B)

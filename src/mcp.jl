@@ -185,24 +185,36 @@ function PrimalDualMCP(
             "Kernel evaluators are currently only supported with the Symbolics " *
             "backend (got symbolic element type $T).",
         )
-        isnothing(η_symbolic) || error(
-            "Kernel evaluators with internal (η) regularization are not yet " *
-            "supported; build without `internally_regularized` and apply η additively.",
-        )
-        _build_kernel = expr -> SymbolicTracingUtils.Symbolics.build_function(
+
+        # Only ∂F/∂z carries an η argument. With internal regularization (η embedded in
+        # `F`, as for games) it is evaluated at the schedule's η to regularize the Newton
+        # system; otherwise η here is a dummy variable the generated code ignores and the
+        # batched assembler adds η additively (the `:identity` scheme). The residual is
+        # the TRUE KKT error and ∂F/∂θ is η-independent, so both are taken at η = 0 and
+        # need no η argument.
+        η_kernel =
+            isnothing(η_symbolic) ?
+            only(SymbolicTracingUtils.make_variables(backend, :η, 1)) : η_symbolic
+        F_at_η0 =
+            isnothing(η_symbolic) ? F_symbolic :
+            SymbolicTracingUtils.Symbolics.substitute.(F_symbolic, Ref(Dict(η_symbolic => 0.0)))
+
+        _build = (expr, extra_args...) -> SymbolicTracingUtils.Symbolics.build_function(
             expr,
             x_symbolic,
             y_symbolic,
             s_symbolic,
             θ_symbolic,
-            ϵ_symbolic;
+            ϵ_symbolic,
+            extra_args...;
             expression = Val{false},
             parallel = SymbolicTracingUtils.Symbolics.SerialForm(),
             cse = true,
         )[2]   # in-place form
 
         # Recompute the ∂F/∂z sparsity the same way `process_∇F` does, so the nonzero
-        # value order matches `∇F_z!.rows`/`.cols` exactly.
+        # value order matches `∇F_z!.rows`/`.cols` exactly (with internal η the pattern
+        # includes the η-regularized diagonal entries, since η is symbolically nonzero).
         ∇Fz_symbolic = SymbolicTracingUtils.sparse_jacobian(F_symbolic, z_symbolic)
         _, _, ∇Fz_values = SparseArrays.findnz(∇Fz_symbolic)
 
@@ -210,10 +222,9 @@ function PrimalDualMCP(
         # small; the sensitivity solve's rhs is dense regardless).
         θ_kernel =
             compute_sensitivities ?
-            _build_kernel(SymbolicTracingUtils.Symbolics.jacobian(F_symbolic, θ_symbolic)) :
-            nothing
+            _build(SymbolicTracingUtils.Symbolics.jacobian(F_at_η0, θ_symbolic)) : nothing
 
-        (_build_kernel(F_symbolic), _build_kernel(collect(∇Fz_values)), θ_kernel)
+        (_build(F_at_η0), _build(collect(∇Fz_values), η_kernel), θ_kernel)
     else
         (nothing, nothing, nothing)
     end
