@@ -444,7 +444,9 @@ fully parallel: the reduction is over the coordinate axis only.
 """
 function max_step_to_boundary(V, Δ; τ = 0.995)
     ratio = @. ifelse(Δ < 0, -τ * V / Δ, Inf)
-    α = vec(minimum(ratio; dims = 1))
+    # `init = Inf` handles the no-constraint case (zero coordinate rows, e.g. a problem
+    # with no inequalities): an empty reduction yields Inf ⇒ α = 1 (a full step).
+    α = vec(minimum(ratio; dims = 1, init = convert(eltype(ratio), Inf)))
     clamp!(α, zero(eltype(α)), one(eltype(α)))
     α
 end
