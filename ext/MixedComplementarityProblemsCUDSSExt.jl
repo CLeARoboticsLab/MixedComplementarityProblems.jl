@@ -77,13 +77,15 @@ function MCP._materialize_linsolve(
 end
 
 # Numeric factorization: gather cache.nzval (CSC order) into the CSR value buffer via
-# the stored permutation, then run cuDSS "factorization" over the batch.
-function MCP.factorize!(cache::BatchedSparseCache{<:CUDA.CUDABackend})
+# the stored permutation, then run cuDSS "factorization" over the batch. (`active` is the
+# CPU active-set optimization; the batched cuDSS factorization processes the whole batch,
+# so a GPU implementation can ignore it.)
+function MCP.factorize!(cache::BatchedSparseCache{<:CUDA.CUDABackend}; active = nothing)
     _todo("factorize!")
 end
 
 # Solve ∇F · out = rhs over the batch via cuDSS "solve". (d × B) RHS/solution.
-function MCP.ldiv!(out, cache::BatchedSparseCache{<:CUDA.CUDABackend}, rhs)
+function MCP.ldiv!(out, cache::BatchedSparseCache{<:CUDA.CUDABackend}, rhs; active = nothing)
     _todo("ldiv!")
 end
 

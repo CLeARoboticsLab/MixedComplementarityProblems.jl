@@ -266,8 +266,10 @@ end
 
 Fill the residual `F` (a dense `(d × B)` device array) for the whole batch, one MCP
 instance per thread. `X, Y, S, Θ` are `(· × B)` batched device arrays and `ϵ` is a
-length-`B` relaxation vector. Requires `mcp` to carry a kernel residual evaluator
-(build it with `compute_kernel_evaluators = true`).
+length-`B` relaxation vector. Computed for ALL instances (not an active subset): the
+residual depends on `ϵ` through the `s⊙y − ϵ` row, so a frozen instance's residual still
+changes when its `ϵ` tightens. Requires `mcp` to carry a kernel residual evaluator
+(`compute_kernel_evaluators`).
 """
 function residual!(F, mcp::PrimalDualMCP, X, Y, S, Θ, ϵ; device)
     isnothing(mcp.F_kernel) && error(
@@ -279,19 +281,23 @@ function residual!(F, mcp::PrimalDualMCP, X, Y, S, Θ, ϵ; device)
     F
 end
 
-@kernel function _jacobian_kernel!(V, X, Y, S, Θ, ϵ, ∇f!, diag_nz, η, regularization)
+@kernel function _jacobian_kernel!(V, X, Y, S, Θ, ϵ, ∇f!, diag_nz, η, regularization, active)
     b = @index(Global)
-    # `regularization` is a `Val(:internal | :identity | :none)`, so each branch is a
-    # compile-time constant (and the kernel stays GPU-safe — a bare Symbol is not isbits
-    # and cannot be passed to a GPU kernel). `:internal` feeds η to the evaluator (η is
-    # baked into ∇F_z); otherwise the evaluator sees η = 0.
-    η_eval = regularization === Val(:internal) ? η[b] : zero(eltype(η))
-    @views ∇f!(V[:, b], X[:, b], Y[:, b], S[:, b], Θ[:, b], ϵ[b], η_eval)
-    # `:identity` adds η[b] to the structurally-present diagonal entries of this
-    # instance's column, in the same per-instance parallel pass.
-    if regularization === Val(:identity)
-        @inbounds for k in diag_nz
-            V[k, b] += η[b]
+    # Skip frozen instances (their ∇F_z is unchanged); a guard, not an early `return`
+    # (KernelAbstractions disallows `return` in a kernel body).
+    @inbounds if active[b]
+        # `regularization` is a `Val(:internal | :identity | :none)`, so each branch is a
+        # compile-time constant (and the kernel stays GPU-safe — a bare Symbol is not
+        # isbits and cannot be passed to a GPU kernel). `:internal` feeds η to the
+        # evaluator (η is baked into ∇F_z); otherwise the evaluator sees η = 0.
+        η_eval = regularization === Val(:internal) ? η[b] : zero(eltype(η))
+        @views ∇f!(V[:, b], X[:, b], Y[:, b], S[:, b], Θ[:, b], ϵ[b], η_eval)
+        # `:identity` adds η[b] to the structurally-present diagonal entries of this
+        # instance's column, in the same per-instance parallel pass.
+        if regularization === Val(:identity)
+            for k in diag_nz
+                V[k, b] += η[b]
+            end
         end
     end
 end
@@ -321,11 +327,13 @@ function jacobian!(
     η;
     device,
     regularize_linear_solve::Symbol = :identity,
+    active = nothing,
 )
     isnothing(mcp.∇F_z_kernel) && error(
         "This MCP has no kernel Jacobian evaluator. Construct it with " *
         "`compute_kernel_evaluators = true`.",
     )
+    am = isnothing(active) ? KernelAbstractions.ones(device, Bool, cache.batch_size) : active
     _jacobian_kernel!(device)(
         cache.nzval,
         X,
@@ -336,7 +344,8 @@ function jacobian!(
         mcp.∇F_z_kernel,
         cache.diag_nz,
         η,
-        Val(regularize_linear_solve);
+        Val(regularize_linear_solve),
+        am;
         ndrange = cache.batch_size,
     )
     KernelAbstractions.synchronize(device)
@@ -366,9 +375,10 @@ Factorize each instance's `∇F` (currently held in `cache.nzval`) into a per-in
 LU stored in `cache.factor`, reused by `ldiv!`. The CPU method is below; GPU backends
 provide their own (cuDSS, D1) via a package extension.
 """
-function factorize!(cache::BatchedSparseCache{<:KernelAbstractions.CPU})
+function factorize!(cache::BatchedSparseCache{<:KernelAbstractions.CPU}; active = nothing)
     template = cache.pattern
     Threads.@threads for b in 1:cache.batch_size
+        (isnothing(active) || @inbounds active[b]) || continue   # skip frozen instances
         if isassigned(cache.factor, b)
             # Refresh this instance's numeric factorization in place from its column of
             # `nzval` (same CSC order as the factor's pattern), reusing the symbolic and
@@ -391,7 +401,7 @@ function factorize!(cache::BatchedSparseCache{<:KernelAbstractions.CPU})
     cache
 end
 
-function factorize!(cache::BatchedSparseCache)
+function factorize!(cache::BatchedSparseCache; active = nothing)
     error(
         "factorize! for BatchedSparse is not implemented for device " *
         "$(typeof(cache.device)). The GPU (cuDSS) backend loads via a package " *
@@ -406,14 +416,15 @@ Solve `∇F · out = rhs` per instance, reusing the factorizations from `factori
 `out` and `rhs` are `(d × B)` arrays. The CPU method is below; GPU backends provide
 their own via a package extension.
 """
-function ldiv!(out, cache::BatchedSparseCache{<:KernelAbstractions.CPU}, rhs)
+function ldiv!(out, cache::BatchedSparseCache{<:KernelAbstractions.CPU}, rhs; active = nothing)
     Threads.@threads for b in 1:cache.batch_size
+        (isnothing(active) || @inbounds active[b]) || continue   # skip frozen instances
         @views LinearAlgebra.ldiv!(out[:, b], cache.factor[b], rhs[:, b])
     end
     out
 end
 
-function ldiv!(out, cache::BatchedSparseCache, rhs)
+function ldiv!(out, cache::BatchedSparseCache, rhs; active = nothing)
     error(
         "ldiv! for BatchedSparse is not implemented for device " *
         "$(typeof(cache.device)). The GPU (cuDSS) backend loads via a package " *
@@ -506,6 +517,11 @@ function solve(
     ϵ .= ϵ_init
     η = KernelAbstractions.zeros(device, Float64, B)
     η .= tol
+    # Per-instance termination flags. `converged` ⇒ solved; `failed` ⇒ diverged/hopeless
+    # (so the outer loop can stop instead of dragging the whole batch to `max_outer`);
+    # `done = converged | failed` gates the loop and freezes stepping.
+    converged = KernelAbstractions.zeros(device, Bool, B)
+    failed = KernelAbstractions.zeros(device, Bool, B)
     done = KernelAbstractions.zeros(device, Bool, B)
 
     residual!(F, mcp, X, Y, S, Θ, ϵ; device)
@@ -519,6 +535,12 @@ function solve(
     # within `max_outer_iters` (they'd be wrongly reported `:failed`).
     inner_count = KernelAbstractions.zeros(device, Float64, B)
 
+    # Active set for the current step: instances still working (kkt > ϵ and not done).
+    # Only these are assembled / factorized / solved each inner iteration — converged and
+    # failed instances are frozen, so a few stuck stragglers no longer make the whole
+    # batch pay for re-factorizing the (many) already-converged instances every step.
+    stepping = KernelAbstractions.zeros(device, Bool, B)
+
     outer = 0
     total = 0
     while !all(done) && outer < max_outer_iters
@@ -528,15 +550,17 @@ function solve(
         inner = 1
         inner_count .= 1
         while any((kkt .> ϵ) .& .!done) && inner < max_inner_iters
-            jacobian!(cache, mcp, X, Y, S, Θ, ϵ, η; device, regularize_linear_solve)
-            factorize!(cache)
-            ldiv!(δz, cache, -F)
+            stepping .= (kkt .> ϵ) .& .!done
+            jacobian!(
+                cache, mcp, X, Y, S, Θ, ϵ, η;
+                device, regularize_linear_solve, active = stepping,
+            )
+            factorize!(cache; active = stepping)
+            ldiv!(δz, cache, -F; active = stepping)
 
-            # Per-instance step sizes; freeze instances that are done or whose current
-            # subproblem has already converged (kkt ≤ ϵ) by zeroing their step.
+            # Per-instance step sizes; frozen instances (not stepping) take a zero step.
             α_s = max_step_to_boundary(S, δs)
             α_y = max_step_to_boundary(Y, δy)
-            stepping = (kkt .> ϵ) .& .!done
             α_s .*= stepping
             α_y .*= stepping
             X .+= reshape(α_s, 1, :) .* δx
@@ -555,11 +579,18 @@ function solve(
         end
 
         # Outer update, per instance: tighten ϵ/η where the subproblem converged,
-        # loosen where it didn't; mark instances done once converged at ϵ ≤ tol. Each
+        # loosen where it didn't; mark instances converged once they reach ϵ ≤ tol. Each
         # instance uses ITS OWN inner-step count, so a converged instance tightens toward
         # tol on its own schedule regardless of stragglers sharing the batch.
         subconverged = kkt .≤ ϵ
-        done .= done .| (subconverged .& (ϵ .≤ tol))
+        converged .= converged .| (subconverged .& (ϵ .≤ tol))
+        # Terminate diverging / non-finite instances. With ∇F_z regularized, an infeasible
+        # instance no longer fast-fails (singular ⇒ NaN); it diverges instead and would
+        # otherwise hold the loop at max_inner × max_outer while the whole batch keeps
+        # getting re-factorized. Freezing it lets the loop exit once every instance is
+        # converged or failed.
+        failed .= failed .| .!isfinite.(kkt) .| (kkt .> 1e12)
+        done .= converged .| failed
         tighten = @. 1 - exp(-tightening_rate * inner_count)
         loosen = @. 1 + exp(-loosening_rate * inner_count)
         working = .!done
@@ -569,7 +600,7 @@ function solve(
         outer += 1
     end
 
-    status = map(b -> b ? :solved : :failed, collect(done))
+    status = map(c -> c ? :solved : :failed, collect(converged))
     (;
         status,
         x = X,
