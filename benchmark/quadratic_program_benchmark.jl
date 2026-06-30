@@ -54,6 +54,7 @@ function generate_random_parameter(
     num_primals = 100,
     num_inequalities = 100,
     sparsity_rate = 0.9,
+    kwargs...,   # tolerate any extra problem-construction kwargs splatted here.
 )
     bernoulli = Distributions.Bernoulli(1 - sparsity_rate)
 

@@ -65,6 +65,9 @@ function generate_random_parameter(
     num_lanes = 2,
     lane_width = 2,
     height = 50,
+    # Tolerate problem-construction kwargs (e.g. `horizon`) that `benchmark_throughput`
+    # also splats here; the parameter depends only on the road environment, not them.
+    kwargs...,
 )
     (; environment, lane_centers) = TrajectoryGameBenchmarkUtils.setup_road_environment(;
         num_lanes,
