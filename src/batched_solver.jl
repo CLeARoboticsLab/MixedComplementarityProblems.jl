@@ -147,17 +147,18 @@ function materialize(mcp::PrimalDualMCP, ::BatchedSparse, device; batch_size)
     mcp.∇F_z!.size == (d, d) ||
         error("Expected a square ($d × $d) ∇F_z pattern, got $(mcp.∇F_z!.size).")
 
-    # The shared sparsity pattern is already computed on the (symbolic) MCP; the
-    # batch differs only in numeric values, so we store ONE pattern.
-    rows = copy(mcp.∇F_z!.rows)
-    cols = copy(mcp.∇F_z!.cols)
+    # The shared sparsity pattern is already computed on the (symbolic) MCP; the batch
+    # differs only in numeric values, so we store ONE pattern. We augment it with the
+    # full diagonal — the SAME augmentation `∇F_z_kernel` was built with — so the kernel's
+    # output lines up with `cache.nzval` and additive (`:identity`) regularization reaches
+    # every row. The unbatched `∇F_z!` pattern itself is left untouched.
+    rows, cols = _augment_full_diagonal(mcp.∇F_z!.rows, mcp.∇F_z!.cols, d)
     nnz = length(rows)
 
-    # Structurally-present diagonal entries (for additive η regularization). Note:
-    # a strategy that relies on additive η must ensure the diagonal is fully present
-    # in the pattern; internal regularization (η baked into the evaluator) does not.
-    # Moved onto `device`: `_jacobian_kernel!` iterates this inside the kernel, so it
-    # must be device-resident (a plain Array on CPU, a device array on GPU).
+    # Diagonal entries (for additive η regularization) — now all `d` of them, since the
+    # pattern was augmented to the full diagonal. Moved onto `device`: `_jacobian_kernel!`
+    # iterates this inside the kernel, so it must be device-resident (a plain Array on
+    # CPU, a device array on GPU).
     diag_nz_host = findall(k -> rows[k] == cols[k], eachindex(rows))
     diag_nz = KernelAbstractions.allocate(device, Int, length(diag_nz_host))
     copyto!(diag_nz, diag_nz_host)

@@ -46,9 +46,12 @@ using Random: Random
         cache = MCP.materialize(mcp, MCP.BatchedSparse(), dev; batch_size = B)
         @test cache.d == d
         @test cache.batch_size == B
-        # cache picks up the full nonzero pattern of the unbatched Jacobian
-        # (nnz(::SparseFunction) == length(.rows), the count of structural nonzeros).
-        @test cache.nnz == nnz(mcp.∇F_z!)
+        # The cache augments the unbatched pattern with the FULL diagonal (so additive
+        # `:identity` regularization can reach every row): it adds the diagonal entries
+        # missing from `∇F_z!`, and `diag_nz` then covers all `d` diagonal positions.
+        present = count(k -> mcp.∇F_z!.rows[k] == mcp.∇F_z!.cols[k], eachindex(mcp.∇F_z!.rows))
+        @test cache.nnz == nnz(mcp.∇F_z!) + (d - present)
+        @test length(cache.diag_nz) == d
         @test size(cache.nzval) == (cache.nnz, B)
         # diag_nz entries really are on the diagonal of the shared pattern.
         @test all(cache.rows[cache.diag_nz] .== cache.cols[cache.diag_nz])
@@ -68,22 +71,22 @@ using Random: Random
     @testset "jacobian! matches unbatched ∇F_z!, plus diagonal η" begin
         cache = MCP.materialize(mcp, MCP.BatchedSparse(), dev; batch_size = B)
 
-        # η = 0: nonzero values match the unbatched sparse Jacobian exactly.
+        # η = 0: the assembled matrix equals the unbatched sparse Jacobian (the augmented
+        # diagonal entries are structural zeros, so they don't change the matrix). Compare
+        # as matrices since the cache pattern carries those extra entries.
         MCP.jacobian!(cache, mcp, X, Y, S, Θ, ϵ, zeros(B); device = dev)
         for bb in 1:B
             Jbuf = mcp.∇F_z!.result_buffer
             mcp.∇F_z!(Jbuf, X[:, bb], Y[:, bb], S[:, bb]; θ = Θ[:, bb], ϵ = ϵ[bb])
-            @test nonzeros(Jbuf) ≈ cache.nzval[:, bb]
+            @test sparse(cache.rows, cache.cols, cache.nzval[:, bb], d, d) ≈ Jbuf
         end
 
-        # η > 0 lands only on the structurally-present diagonal entries.
+        # :identity η lands on the FULL diagonal (∇F + η·I), reaching even rows whose
+        # diagonal is structurally absent from the unbatched pattern (e.g. the H − s block).
         MCP.jacobian!(cache, mcp, X, Y, S, Θ, ϵ, fill(0.7, B); device = dev)
         Jbuf = mcp.∇F_z!.result_buffer
         mcp.∇F_z!(Jbuf, X[:, 1], Y[:, 1], S[:, 1]; θ = Θ[:, 1], ϵ = ϵ[1])
-        diff = cache.nzval[:, 1] .- nonzeros(Jbuf)
-        offdiag = setdiff(1:cache.nnz, cache.diag_nz)
-        @test all(isapprox.(diff[cache.diag_nz], 0.7; atol = 1e-12))
-        @test all(abs.(diff[offdiag]) .< 1e-12)
+        @test sparse(cache.rows, cache.cols, cache.nzval[:, 1], d, d) ≈ Jbuf + 0.7 * I
     end
 
     @testset "factorize!/ldiv! solve the batched Newton system" begin
@@ -204,7 +207,7 @@ using Random: Random
         )
         Jbuf = mcp_reg.∇F_z!.result_buffer
         mcp_reg.∇F_z!(Jbuf, X[:, 1], Y[:, 1], S[:, 1]; θ = Θ[:, 1], ϵ = ϵ[1], η = η_reg)
-        @test nonzeros(Jbuf) ≈ cache.nzval[:, 1]
+        @test sparse(cache.rows, cache.cols, cache.nzval[:, 1], d, d) ≈ Jbuf
 
         # End-to-end: the :internal solve converges to the (unregularized) QP solution
         # as η → 0, matching the unbatched solver on the same parameter (Θ's 1st column).

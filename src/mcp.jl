@@ -66,6 +66,21 @@ function PrimalDualMCP(
     )
 end
 
+""" Augment a CSC sparsity pattern `(rows, cols)` of a `d × d` matrix with any missing
+diagonal entries, returned together in CSC (column-major) order. Used only for the
+kernelized ∂F/∂z (the batched path): adding the full diagonal lets the batched assembler
+regularize every row additively (`∇F + η·I`), the way the unbatched solver does. The
+unbatched `∇F_z!` is left untouched.
+"""
+function _augment_full_diagonal(rows, cols, d)
+    present = Set{Int}(rows[k] for k in eachindex(rows) if rows[k] == cols[k])
+    missing_diagonal = [i for i in 1:d if i ∉ present]
+    aug_rows = vcat(rows, missing_diagonal)
+    aug_cols = vcat(cols, missing_diagonal)
+    order = sortperm(collect(zip(aug_cols, aug_rows)))   # CSC order: by column, then row
+    (aug_rows[order], aug_cols[order])
+end
+
 "Construct a PrimalDualMCP from symbolic expressions of G(.) and H(.)."
 function PrimalDualMCP(
     G_symbolic::Vector{T},
@@ -212,11 +227,17 @@ function PrimalDualMCP(
             cse = true,
         )[2]   # in-place form
 
-        # Recompute the ∂F/∂z sparsity the same way `process_∇F` does, so the nonzero
-        # value order matches `∇F_z!.rows`/`.cols` exactly (with internal η the pattern
-        # includes the η-regularized diagonal entries, since η is symbolically nonzero).
+        # ∂F/∂z values. Augment the symbolic pattern with the FULL diagonal — missing
+        # diagonal entries become structural zeros — so the batched `:identity` scheme can
+        # add η to EVERY row (matching the unbatched `∇F + η·I`); without this, rows whose
+        # diagonal is structurally absent (e.g. the `H − s` block) stay unregularized and
+        # the system is singular. `materialize` reproduces this augmented order, so the
+        # kernel's output lines up with `cache.nzval`. (With internal η the pattern already
+        # carries the η-regularized primal diagonal; the extra zeros are harmless there.)
         ∇Fz_symbolic = SymbolicTracingUtils.sparse_jacobian(F_symbolic, z_symbolic)
-        _, _, ∇Fz_values = SparseArrays.findnz(∇Fz_symbolic)
+        fz_rows, fz_cols, _ = SparseArrays.findnz(∇Fz_symbolic)
+        aug_rows, aug_cols = _augment_full_diagonal(fz_rows, fz_cols, length(z_symbolic))
+        ∇Fz_values = [∇Fz_symbolic[aug_rows[k], aug_cols[k]] for k in eachindex(aug_rows)]
 
         # Dense (d × nθ) parameter Jacobian for batched sensitivities (nθ is typically
         # small; the sensitivity solve's rhs is dense regardless).
@@ -224,7 +245,7 @@ function PrimalDualMCP(
             compute_sensitivities ?
             _build(SymbolicTracingUtils.Symbolics.jacobian(F_at_η0, θ_symbolic)) : nothing
 
-        (_build(F_at_η0), _build(collect(∇Fz_values), η_kernel), θ_kernel)
+        (_build(F_at_η0), _build(∇Fz_values, η_kernel), θ_kernel)
     else
         (nothing, nothing, nothing)
     end

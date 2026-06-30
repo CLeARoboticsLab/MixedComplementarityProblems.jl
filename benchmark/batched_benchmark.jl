@@ -40,12 +40,15 @@ function benchmark_throughput(
     Θ = reduce(hcat, θs)                  # (nθ × N) — column b is instance b
     parameter_dimension = size(Θ, 1)
 
-    # Internally-regularized problems (trajectory games carry η inside K) use the
-    # `:internal` scheme so the batched solver regularizes ∇F_z through the evaluator;
-    # everything else uses the default additive `:identity` scheme.
+    # Solve with the additive `:identity` scheme (full ∇F + η·I). Even problems that carry
+    # an internal η (trajectory games) want this: their KKT systems need every row
+    # regularized, which `:identity` provides (the batched assembler augments the pattern
+    # to the full diagonal); the `:internal` primal-only regularization is insufficient
+    # and diverges on them. `internally_regularized` only affects how the MCPs are built
+    # (the game's K carries η, which PATH strips).
     internally_regularized =
         hasproperty(problem, :η_symbolic) && !isnothing(problem.η_symbolic)
-    regularize_linear_solve = internally_regularized ? :internal : :identity
+    regularize_linear_solve = :identity
 
     # Batched-capable IP MCP (kernel evaluators are required by BatchedInteriorPoint).
     # Callable-`K` problems (QP) use the function constructor; symbolic problems (games,
