@@ -256,27 +256,32 @@ end
 # to avoid a stall every Newton iteration.
 # ---------------------------------------------------------------------------
 
-@kernel function _residual_kernel!(F, X, Y, S, Θ, ϵ, f!)
+@kernel function _residual_kernel!(F, X, Y, S, Θ, ϵ, f!, active)
     b = @index(Global)
-    @views f!(F[:, b], X[:, b], Y[:, b], S[:, b], Θ[:, b], ϵ[b])
+    # Skip frozen instances (a guard, not an early `return` — KA forbids that). Valid
+    # ONLY while ϵ is fixed: the residual depends on ϵ via the `s⊙y − ϵ` row, so a frozen
+    # instance must be refreshed (full pass) whenever its ϵ changes.
+    @inbounds if active[b]
+        @views f!(F[:, b], X[:, b], Y[:, b], S[:, b], Θ[:, b], ϵ[b])
+    end
 end
 
 """
-    residual!(F, mcp, X, Y, S, Θ, ϵ; device)
+    residual!(F, mcp, X, Y, S, Θ, ϵ; device, active = nothing)
 
-Fill the residual `F` (a dense `(d × B)` device array) for the whole batch, one MCP
-instance per thread. `X, Y, S, Θ` are `(· × B)` batched device arrays and `ϵ` is a
-length-`B` relaxation vector. Computed for ALL instances (not an active subset): the
-residual depends on `ϵ` through the `s⊙y − ϵ` row, so a frozen instance's residual still
-changes when its `ϵ` tightens. Requires `mcp` to carry a kernel residual evaluator
-(`compute_kernel_evaluators`).
+Fill the residual `F` (a dense `(d × B)` device array), one MCP instance per thread.
+`active` (a length-`B` Bool device array, or `nothing` for all) restricts work to the
+still-stepping instances — safe only while `ϵ` is held fixed (the residual depends on `ϵ`
+through the `s⊙y − ϵ` row, so a full pass is needed whenever `ϵ` changes). Requires `mcp`
+to carry a kernel residual evaluator (`compute_kernel_evaluators`).
 """
-function residual!(F, mcp::PrimalDualMCP, X, Y, S, Θ, ϵ; device)
+function residual!(F, mcp::PrimalDualMCP, X, Y, S, Θ, ϵ; device, active = nothing)
     isnothing(mcp.F_kernel) && error(
         "This MCP has no kernel residual evaluator. Construct it with " *
         "`compute_kernel_evaluators = true`.",
     )
-    _residual_kernel!(device)(F, X, Y, S, Θ, ϵ, mcp.F_kernel; ndrange = size(F, 2))
+    am = isnothing(active) ? KernelAbstractions.ones(device, Bool, size(F, 2)) : active
+    _residual_kernel!(device)(F, X, Y, S, Θ, ϵ, mcp.F_kernel, am; ndrange = size(F, 2))
     KernelAbstractions.synchronize(device)
     F
 end
@@ -574,7 +579,9 @@ function solve(
 
             total += 1
             inner += 1
-            residual!(F, mcp, X, Y, S, Θ, ϵ; device)
+            # ϵ is fixed within this inner loop, so only the stepping instances' residuals
+            # can change; frozen ones stay valid. (A full refresh follows each ϵ update.)
+            residual!(F, mcp, X, Y, S, Θ, ϵ; device, active = stepping)
             kkt = vec(maximum(abs, F; dims = 1))
         end
 
@@ -597,6 +604,13 @@ function solve(
         @. ϵ = ifelse(working, ifelse(subconverged, ϵ * tighten, ϵ * loosen), ϵ)
         @. η = ifelse(working, ifelse(subconverged, η * tighten, η * loosen), η)
         @. ϵ = min(ϵ, one(eltype(ϵ)))
+
+        # ϵ just changed, so every instance's residual is stale in its `s⊙y − ϵ` row
+        # (even frozen ones). Refresh ALL of them once, so the next round's convergence
+        # test and active set use a correct `kkt`. This full pass is O(B) per outer round
+        # (≪ the per-inner-iteration cost the active set saves).
+        residual!(F, mcp, X, Y, S, Θ, ϵ; device)
+        kkt = vec(maximum(abs, F; dims = 1))
         outer += 1
     end
 
