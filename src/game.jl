@@ -29,6 +29,8 @@ function ParametricGame(;
     problems,
     shared_equality = nothing,
     shared_inequality = nothing,
+    compute_sensitivities = false,
+    compute_kernel_evaluators = false,
 )
     (; K_symbolic, z_symbolic, θ_symbolic, η_symbolic, lower_bounds, upper_bounds, dims) =
         game_to_mcp(;
@@ -46,6 +48,8 @@ function ParametricGame(;
         lower_bounds,
         upper_bounds;
         η_symbolic,
+        compute_sensitivities,
+        compute_kernel_evaluators,
     )
 
     ParametricGame(problems, shared_equality, shared_inequality, dims, mcp)

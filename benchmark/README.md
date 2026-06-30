@@ -30,18 +30,18 @@ to clear `num_samples` problems for PATH, the sequential `InteriorPoint`, and th
 solver. **Start Julia with several threads** (e.g. `julia -t 4`); on heterogeneous CPUs
 (Apple silicon) prefer `-t <#performance-cores>` (see §10 of `docs/gpu_kkt_design.md`).
 
+It works for both benchmark types — the quadratic program and the trajectory game (the
+latter is internally η-regularized, so it is solved with the `:internal` scheme):
+
 ```julia
 julia> include("SolverBenchmarks.jl")
-julia> data = SolverBenchmarks.benchmark_throughput(; num_samples = 256);
+julia> data = SolverBenchmarks.benchmark_throughput(; num_samples = 256);                              # QP
+julia> data = SolverBenchmarks.benchmark_throughput(SolverBenchmarks.TrajectoryGameBenchmark();
+                                                     num_samples = 64, problem_kwargs = (; horizon = 3));  # game
 julia> SolverBenchmarks.throughput_summary(data)
 ```
 
-Limitations:
-
-- Currently supports the quadratic-program benchmark only. The trajectory game cannot use
-  the batched solver yet: its MCP is built with internal η-regularization, which the
-  kernel evaluators `BatchedInteriorPoint` requires do not support, and its large KKT
-  system would stress `SerialForm` codegen compile time (D2 in the design doc). Batched
-  trajectory games are a follow-up that rides along with the GPU work.
-- Keep `num_primals` modest. The QP's symbolic Hessian block is dense, so large
-  `num_primals` makes kernel-evaluator compilation slow.
+Caveat: `BatchedInteriorPoint` requires kernel evaluators built with `SerialForm` codegen,
+whose **compile time grows with the symbolic KKT size** (D2 in the design doc). Keep the
+QP's `num_primals` modest (dense symbolic Hessian) and the game's `horizon` modest — large
+problems can make the one-time kernel-evaluator build slow.
