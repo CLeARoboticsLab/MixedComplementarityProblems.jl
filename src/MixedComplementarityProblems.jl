@@ -2,7 +2,7 @@ module MixedComplementarityProblems
 
 using SparseArrays: SparseArrays
 using LinearAlgebra: LinearAlgebra, I, norm, eigvals
-using BlockArrays: BlockArray, blocks, blocksizes
+using BlockArrays: BlockArray, blocklengths, blocks
 using SymbolicTracingUtils: SymbolicTracingUtils as SymbolicTracingUtils
 using LinearSolve: LinearProblem, init, solve!, KrylovJL_GMRES, UMFPACKFactorization
 using SciMLBase: SciMLBase
