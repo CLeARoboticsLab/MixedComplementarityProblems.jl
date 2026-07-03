@@ -29,6 +29,7 @@ function benchmark_throughput(
     batched_mcp = nothing,
     path_mcp = nothing,
     tol = 1e-4,
+    device = KernelAbstractions.CPU(),
 )
     @info "Generating random problems..."
     problem = generate_test_problem(benchmark_type; problem_kwargs...)
@@ -37,7 +38,8 @@ function benchmark_throughput(
     θs = map(1:num_samples) do _
         generate_random_parameter(benchmark_type; rng, problem_kwargs...)
     end
-    Θ = reduce(hcat, θs)                  # (nθ × N) — column b is instance b
+    Θ_host = reduce(hcat, θs)              # (nθ × N) — column b is instance b
+    Θ = Adapt.adapt(device, Θ_host)        # moved to `device` once; reused for every solve
     parameter_dimension = size(Θ, 1)
 
     # Solve with the additive `:identity` scheme (full ∇F + η·I). Even problems that carry
@@ -115,6 +117,7 @@ function benchmark_throughput(
         Θ[:, 1:1];
         tol,
         regularize_linear_solve,
+        device,
     )
     MixedComplementarityProblems.solve(
         MixedComplementarityProblems.InteriorPoint(),
@@ -125,8 +128,8 @@ function benchmark_throughput(
     )
     ParametricMCPs.solve(path_mcp, θs[1]; warn_on_convergence_failure = false)
 
-    # --- Batched IP: one threaded call over the whole batch. ---
-    @info "Solving batch with BatchedInteriorPoint ($(Threads.nthreads()) threads)..."
+    # --- Batched IP: one call over the whole batch, on `device`. ---
+    @info "Solving batch with BatchedInteriorPoint (device = $(typeof(device)), $(Threads.nthreads()) threads)..."
     local batched_sol
     t_batched = @elapsed batched_sol = MixedComplementarityProblems.solve(
         MixedComplementarityProblems.BatchedInteriorPoint(),
@@ -134,6 +137,7 @@ function benchmark_throughput(
         Θ;
         tol,
         regularize_linear_solve,
+        device,
     )
     n_batched = count(==(:solved), batched_sol.status)
 
@@ -164,6 +168,7 @@ function benchmark_throughput(
         path_mcp,
         num_samples,
         nthreads = Threads.nthreads(),
+        device,
         tol,
         batched = (; total_time = t_batched, num_solved = n_batched),
         ip = (; total_time = t_ip, num_solved = n_ip),
@@ -173,7 +178,7 @@ end
 
 "Print a throughput summary from `benchmark_throughput` data."
 function throughput_summary(data)
-    (; num_samples, nthreads) = data
+    (; num_samples, nthreads, device) = data
     rate(t) = num_samples / t                      # problems / second
     row(name, d) = @info string(
         rpad(name, 26),
@@ -182,7 +187,7 @@ function throughput_summary(data)
         "solved ", d.num_solved, "/", num_samples,
     )
 
-    @info "Throughput over $num_samples problems on $nthreads thread(s), tol=$(data.tol):"
+    @info "Throughput over $num_samples problems (BatchedInteriorPoint device = $(typeof(device)), $nthreads thread(s)), tol=$(data.tol):"
     row("PATH (1 thread)", data.path)
     row("InteriorPoint (seq)", data.ip)
     row("BatchedInteriorPoint", data.batched)

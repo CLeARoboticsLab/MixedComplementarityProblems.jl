@@ -480,8 +480,20 @@ with `compute_kernel_evaluators = true`.
 Returns `(; status, x, y, s, kkt_error, ϵ, outer_iters, total_iters)` where `status`
 is a length-`B` vector of `:solved`/`:failed`, `x, y, s` are `(· × B)`, and
 `kkt_error, ϵ` are length-`B`.
+
+`mcp`'s kernel evaluators are `eval`'d closures (see the note in `src/mcp.jl`), so if
+`mcp` was constructed moments ago IN THE SAME calling frame (e.g. `mcp = PrimalDualMCP(...);
+solve(BatchedInteriorPoint(), mcp, Θ)` inside one function body), this whole call is
+pinned to the world active before that `eval` and would otherwise raise a world-age
+`MethodError`. This thin wrapper forces the dynamic dispatch onto the current world via
+`Base.invokelatest` — paid once per `solve` call, not per Newton iteration, since
+everything `_solve_batched` calls inherits the now-current world.
 """
-function solve(
+function solve(kind::BatchedInteriorPoint, mcp::PrimalDualMCP, Θ::AbstractMatrix; kwargs...)
+    Base.invokelatest(_solve_batched, kind, mcp, Θ; kwargs...)
+end
+
+function _solve_batched(
     ::BatchedInteriorPoint,
     mcp::PrimalDualMCP,
     Θ::AbstractMatrix;
@@ -678,8 +690,16 @@ next `ny` are `∂y/∂θ`, the last `ny` are `∂s/∂θ`.
 For this to be the true solution sensitivity, `(X, Y, S)` must be a converged
 solution (`F = 0`). Requires `mcp` built with `compute_kernel_evaluators` AND
 `compute_sensitivities`.
+
+See the world-age note on `solve(::BatchedInteriorPoint, ...)` above — same reasoning
+applies here (`mcp.∇F_θ_kernel` is an `eval`'d closure too), hence the
+`Base.invokelatest` wrapper.
 """
-function solve_jacobian_θ(
+function solve_jacobian_θ(mcp::PrimalDualMCP, X, Y, S, Θ, ϵ; kwargs...)
+    Base.invokelatest(_solve_batched_jacobian_θ, mcp, X, Y, S, Θ, ϵ; kwargs...)
+end
+
+function _solve_batched_jacobian_θ(
     mcp::PrimalDualMCP,
     X,
     Y,
