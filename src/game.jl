@@ -1,3 +1,6 @@
+"Wrap a flat vector into a `BlockArray` with the given block dimensions."
+to_blockvector(block_dimensions) = data -> BlockArray(data, block_dimensions)
+
 "Utility to represent a parameterized optimization problem."
 Base.@kwdef struct OptimizationProblem{T1,T2,T3}
     objective::T1
