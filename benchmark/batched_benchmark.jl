@@ -118,6 +118,14 @@ function benchmark_throughput(
         )
     end
 
+    # Per-`benchmark_type` initial guess for the batched solve (e.g. the trajectory
+    # game's zero-input rollout — see `generate_initial_guess` in
+    # `trajectory_game_benchmark.jl`); `nothing` (cold zero start) for benchmark types
+    # that don't override it, matching prior behavior.
+    X₀ = run_batched ?
+        generate_initial_guess(benchmark_type, batched_mcp, Θ, device; problem_kwargs...) :
+        nothing
+
     # Warm up (compile) only the solvers being run.
     @info "Warming up solvers..."
     run_batched && MixedComplementarityProblems.solve(
@@ -127,6 +135,7 @@ function benchmark_throughput(
         tol,
         regularize_linear_solve,
         device,
+        X₀ = isnothing(X₀) ? nothing : X₀[:, 1:1],
     )
     run_sequential_ip && MixedComplementarityProblems.solve(
         MixedComplementarityProblems.InteriorPoint(),
@@ -148,6 +157,7 @@ function benchmark_throughput(
             tol,
             regularize_linear_solve,
             device,
+            X₀,
         )
         (; total_time = t_batched, num_solved = count(==(:solved), batched_sol.status))
     end
