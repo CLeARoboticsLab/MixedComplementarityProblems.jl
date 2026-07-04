@@ -1,3 +1,6 @@
+"Wrap a flat vector into a `BlockArray` with the given block dimensions."
+to_blockvector(block_dimensions) = data -> BlockArray(data, block_dimensions)
+
 "Utility to represent a parameterized optimization problem."
 Base.@kwdef struct OptimizationProblem{T1,T2,T3}
     objective::T1
@@ -180,8 +183,11 @@ function dimensions(
     shared_equality,
     shared_inequality,
 )
-    x = only(blocksizes(test_point))
-    θ = only(blocksizes(test_parameter))
+    # `blocksizes` itself is not used here: BlockArrays 1.x redefined it to mean "size
+    # per block" rather than 0.16.x's "block-lengths per dimension" — `blocklengths.(axes(·))`
+    # is the version-stable spelling of the latter, which is what we actually want.
+    x = only(blocklengths.(axes(test_point)))
+    θ = only(blocklengths.(axes(test_parameter)))
     λ = map(problems, blocks(test_parameter)) do p, θi
         isnothing(p.private_equality) ? 0 : length(p.private_equality(test_point, θi))
     end

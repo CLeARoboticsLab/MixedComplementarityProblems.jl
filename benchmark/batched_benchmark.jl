@@ -29,6 +29,10 @@ function benchmark_throughput(
     batched_mcp = nothing,
     path_mcp = nothing,
     tol = 1e-4,
+    device = KernelAbstractions.CPU(),
+    run_batched = true,
+    run_sequential_ip = true,
+    run_path = true,
 )
     @info "Generating random problems..."
     problem = generate_test_problem(benchmark_type; problem_kwargs...)
@@ -37,7 +41,8 @@ function benchmark_throughput(
     θs = map(1:num_samples) do _
         generate_random_parameter(benchmark_type; rng, problem_kwargs...)
     end
-    Θ = reduce(hcat, θs)                  # (nθ × N) — column b is instance b
+    Θ_host = reduce(hcat, θs)              # (nθ × N) — column b is instance b
+    Θ = Adapt.adapt(device, Θ_host)        # moved to `device` once; reused for every solve
     parameter_dimension = size(Θ, 1)
 
     # Solve with the additive `:identity` scheme (full ∇F + η·I). Even problems that carry
@@ -51,129 +56,147 @@ function benchmark_throughput(
     regularize_linear_solve = :identity
 
     # Batched-capable IP MCP (kernel evaluators are required by BatchedInteriorPoint).
-    # Callable-`K` problems (QP) use the function constructor; symbolic problems (games,
-    # via `build_mcp_components`) use the symbolic constructor with their internal η.
-    @info "Generating batched IP MCP (with kernel evaluators)..."
-    batched_mcp = @something(
-        batched_mcp,
-        if hasproperty(problem, :K)
-            MixedComplementarityProblems.PrimalDualMCP(
-                problem.K,
-                problem.lower_bounds,
-                problem.upper_bounds;
-                parameter_dimension,
-                compute_kernel_evaluators = true,
-            )
-        else
-            MixedComplementarityProblems.PrimalDualMCP(
-                problem.K_symbolic,
-                problem.z_symbolic,
-                problem.θ_symbolic,
-                problem.lower_bounds,
-                problem.upper_bounds;
-                η_symbolic = internally_regularized ? problem.η_symbolic : nothing,
-                compute_kernel_evaluators = true,
-            )
-        end
-    )
+    # Needed for BOTH `run_batched` and `run_sequential_ip` (the sequential comparison
+    # reuses this same mcp, not a separate one). Callable-`K` problems (QP) use the
+    # function constructor; symbolic problems (games, via `build_mcp_components`) use the
+    # symbolic constructor with their internal η.
+    if run_batched || run_sequential_ip
+        @info "Generating batched IP MCP (with kernel evaluators)..."
+        batched_mcp = @something(
+            batched_mcp,
+            if hasproperty(problem, :K)
+                MixedComplementarityProblems.PrimalDualMCP(
+                    problem.K,
+                    problem.lower_bounds,
+                    problem.upper_bounds;
+                    parameter_dimension,
+                    compute_kernel_evaluators = true,
+                )
+            else
+                MixedComplementarityProblems.PrimalDualMCP(
+                    problem.K_symbolic,
+                    problem.z_symbolic,
+                    problem.θ_symbolic,
+                    problem.lower_bounds,
+                    problem.upper_bounds;
+                    η_symbolic = internally_regularized ? problem.η_symbolic : nothing,
+                    compute_kernel_evaluators = true,
+                )
+            end
+        )
+    end
 
     # PATH solves the unregularized system, so strip any internal η from the symbolic K.
-    @info "Generating PATH MCP..."
-    path_mcp = @something(
-        path_mcp,
-        if hasproperty(problem, :K)
-            ParametricMCPs.ParametricMCP(
-                (z, θ) -> problem.K(z; θ),
-                problem.lower_bounds,
-                problem.upper_bounds,
-                parameter_dimension,
-            )
-        else
-            K_symbolic =
-                internally_regularized ?
-                Vector{Symbolics.Num}(
-                    Symbolics.substitute.(
-                        problem.K_symbolic,
-                        Ref(Dict(problem.η_symbolic => 0.0)),
-                    ),
-                ) : problem.K_symbolic
-            ParametricMCPs.ParametricMCP(
-                K_symbolic,
-                problem.z_symbolic,
-                problem.θ_symbolic,
-                problem.lower_bounds,
-                problem.upper_bounds,
-            )
-        end
-    )
+    if run_path
+        @info "Generating PATH MCP..."
+        path_mcp = @something(
+            path_mcp,
+            if hasproperty(problem, :K)
+                ParametricMCPs.ParametricMCP(
+                    (z, θ) -> problem.K(z; θ),
+                    problem.lower_bounds,
+                    problem.upper_bounds,
+                    parameter_dimension,
+                )
+            else
+                K_symbolic =
+                    internally_regularized ?
+                    Vector{Symbolics.Num}(
+                        Symbolics.substitute.(
+                            problem.K_symbolic,
+                            Ref(Dict(problem.η_symbolic => 0.0)),
+                        ),
+                    ) : problem.K_symbolic
+                ParametricMCPs.ParametricMCP(
+                    K_symbolic,
+                    problem.z_symbolic,
+                    problem.θ_symbolic,
+                    problem.lower_bounds,
+                    problem.upper_bounds,
+                )
+            end
+        )
+    end
 
-    # Warm up (compile) each solver before timing.
+    # Warm up (compile) only the solvers being run.
     @info "Warming up solvers..."
-    MixedComplementarityProblems.solve(
+    run_batched && MixedComplementarityProblems.solve(
         MixedComplementarityProblems.BatchedInteriorPoint(),
         batched_mcp,
         Θ[:, 1:1];
         tol,
         regularize_linear_solve,
+        device,
     )
-    MixedComplementarityProblems.solve(
+    run_sequential_ip && MixedComplementarityProblems.solve(
         MixedComplementarityProblems.InteriorPoint(),
         batched_mcp,
         θs[1];
         tol,
         regularize_linear_solve,
     )
-    ParametricMCPs.solve(path_mcp, θs[1]; warn_on_convergence_failure = false)
+    run_path && ParametricMCPs.solve(path_mcp, θs[1]; warn_on_convergence_failure = false)
 
-    # --- Batched IP: one threaded call over the whole batch. ---
-    @info "Solving batch with BatchedInteriorPoint ($(Threads.nthreads()) threads)..."
-    local batched_sol
-    t_batched = @elapsed batched_sol = MixedComplementarityProblems.solve(
-        MixedComplementarityProblems.BatchedInteriorPoint(),
-        batched_mcp,
-        Θ;
-        tol,
-        regularize_linear_solve,
-    )
-    n_batched = count(==(:solved), batched_sol.status)
-
-    # --- Unbatched IP: sequential, single instance at a time. ---
-    @info "Solving sequentially with InteriorPoint..."
-    t_ip = @elapsed n_ip = count(θs) do θ
-        MixedComplementarityProblems.solve(
-            MixedComplementarityProblems.InteriorPoint(),
+    # --- Batched IP: one call over the whole batch, on `device`. ---
+    batched = if run_batched
+        @info "Solving batch with BatchedInteriorPoint (device = $(typeof(device)), $(Threads.nthreads()) threads)..."
+        local batched_sol
+        t_batched = @elapsed batched_sol = MixedComplementarityProblems.solve(
+            MixedComplementarityProblems.BatchedInteriorPoint(),
             batched_mcp,
-            θ;
+            Θ;
             tol,
             regularize_linear_solve,
-        ).status == :solved
+            device,
+        )
+        (; total_time = t_batched, num_solved = count(==(:solved), batched_sol.status))
+    end
+
+    # --- Unbatched IP: sequential, single instance at a time. ---
+    ip = if run_sequential_ip
+        @info "Solving sequentially with InteriorPoint..."
+        t_ip = @elapsed n_ip = count(θs) do θ
+            MixedComplementarityProblems.solve(
+                MixedComplementarityProblems.InteriorPoint(),
+                batched_mcp,
+                θ;
+                tol,
+                regularize_linear_solve,
+            ).status == :solved
+        end
+        (; total_time = t_ip, num_solved = n_ip)
     end
 
     # --- PATH: sequential, single-threaded. ---
-    @info "Solving sequentially with PATH..."
-    t_path = @elapsed n_path = count(θs) do θ
-        ParametricMCPs.solve(
-            path_mcp,
-            θ;
-            warn_on_convergence_failure = false,
-        ).status == PATHSolver.MCP_Solved
+    path = if run_path
+        @info "Solving sequentially with PATH..."
+        t_path = @elapsed n_path = count(θs) do θ
+            ParametricMCPs.solve(
+                path_mcp,
+                θ;
+                warn_on_convergence_failure = false,
+            ).status == PATHSolver.MCP_Solved
+        end
+        (; total_time = t_path, num_solved = n_path)
     end
 
     (;
-        batched_mcp,
+        batched_mcp = run_batched || run_sequential_ip ? batched_mcp : nothing,
         path_mcp,
         num_samples,
         nthreads = Threads.nthreads(),
+        device,
         tol,
-        batched = (; total_time = t_batched, num_solved = n_batched),
-        ip = (; total_time = t_ip, num_solved = n_ip),
-        path = (; total_time = t_path, num_solved = n_path),
+        batched,
+        ip,
+        path,
     )
 end
 
-"Print a throughput summary from `benchmark_throughput` data."
+"Print a throughput summary from `benchmark_throughput` data. Solvers that weren't run
+(their field is `nothing`) are skipped."
 function throughput_summary(data)
-    (; num_samples, nthreads) = data
+    (; num_samples, nthreads, device) = data
     rate(t) = num_samples / t                      # problems / second
     row(name, d) = @info string(
         rpad(name, 26),
@@ -182,20 +205,23 @@ function throughput_summary(data)
         "solved ", d.num_solved, "/", num_samples,
     )
 
-    @info "Throughput over $num_samples problems on $nthreads thread(s), tol=$(data.tol):"
-    row("PATH (1 thread)", data.path)
-    row("InteriorPoint (seq)", data.ip)
-    row("BatchedInteriorPoint", data.batched)
-    @info string(
-        "Batched speedup: ",
-        round(data.path.total_time / data.batched.total_time; digits = 2),
-        "× vs PATH,  ",
-        round(data.ip.total_time / data.batched.total_time; digits = 2),
-        "× vs sequential InteriorPoint",
-    )
+    @info "Throughput over $num_samples problems (BatchedInteriorPoint device = $(typeof(device)), $nthreads thread(s)), tol=$(data.tol):"
+    !isnothing(data.path) && row("PATH (1 thread)", data.path)
+    !isnothing(data.ip) && row("InteriorPoint (seq)", data.ip)
+    !isnothing(data.batched) && row("BatchedInteriorPoint", data.batched)
 
-    (;
-        batched_vs_path = data.path.total_time / data.batched.total_time,
-        batched_vs_ip = data.ip.total_time / data.batched.total_time,
-    )
+    batched_vs_path =
+        !isnothing(data.batched) && !isnothing(data.path) ?
+        data.path.total_time / data.batched.total_time : nothing
+    batched_vs_ip =
+        !isnothing(data.batched) && !isnothing(data.ip) ?
+        data.ip.total_time / data.batched.total_time : nothing
+
+    messages = String[]
+    !isnothing(batched_vs_path) && push!(messages, "$(round(batched_vs_path; digits = 2))× vs PATH")
+    !isnothing(batched_vs_ip) &&
+        push!(messages, "$(round(batched_vs_ip; digits = 2))× vs sequential InteriorPoint")
+    !isempty(messages) && @info string("Batched speedup: ", join(messages, ",  "))
+
+    (; batched_vs_path, batched_vs_ip)
 end

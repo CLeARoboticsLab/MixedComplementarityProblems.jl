@@ -195,6 +195,17 @@ function PrimalDualMCP(
     # callable inside a KernelAbstractions kernel. Opt-in: SerialForm can be slow to
     # compile on large problems (see D2 in docs/gpu_kkt_design.md), so CPU-only users
     # pay nothing by default.
+    #
+    # `expression = Val{true}` + `eval` (rather than `Val{false}`'s
+    # RuntimeGeneratedFunction) is required for the GPU path: a `RuntimeGeneratedFunction`
+    # wraps its body as an `Expr`, which is not a bitstype and can't be passed as a CUDA
+    # kernel argument, whereas an `eval`'d closure with no external captures is a
+    # zero-field (isbits) singleton. This is safe across the normal construct-then-solve
+    # usage pattern (`PrimalDualMCP(...)` here, `solve`/`residual!`/`jacobian!` called
+    # later from separate top-level dispatches) with no `invokelatest` needed — the world
+    # age problem only bites code that evals and calls within the SAME compiled frame,
+    # which doesn't happen here. Verified against the CPU KLU path (identical numeric
+    # results) and against an actual CUDA kernel launch.
     F_kernel, ∇F_z_kernel, ∇F_θ_kernel = if compute_kernel_evaluators
         T <: SymbolicTracingUtils.Symbolics.Num || error(
             "Kernel evaluators are currently only supported with the Symbolics " *
@@ -214,18 +225,20 @@ function PrimalDualMCP(
             isnothing(η_symbolic) ? F_symbolic :
             SymbolicTracingUtils.Symbolics.substitute.(F_symbolic, Ref(Dict(η_symbolic => 0.0)))
 
-        _build = (expr, extra_args...) -> SymbolicTracingUtils.Symbolics.build_function(
-            expr,
-            x_symbolic,
-            y_symbolic,
-            s_symbolic,
-            θ_symbolic,
-            ϵ_symbolic,
-            extra_args...;
-            expression = Val{false},
-            parallel = SymbolicTracingUtils.Symbolics.SerialForm(),
-            cse = true,
-        )[2]   # in-place form
+        _build = (expr, extra_args...) -> eval(
+            SymbolicTracingUtils.Symbolics.build_function(
+                expr,
+                x_symbolic,
+                y_symbolic,
+                s_symbolic,
+                θ_symbolic,
+                ϵ_symbolic,
+                extra_args...;
+                expression = Val{true},
+                parallel = SymbolicTracingUtils.Symbolics.SerialForm(),
+                cse = true,
+            )[2],   # in-place form
+        )
 
         # ∂F/∂z values. Augment the symbolic pattern with the FULL diagonal — missing
         # diagonal entries become structural zeros — so the batched `:identity` scheme can

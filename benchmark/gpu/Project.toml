@@ -1,7 +1,8 @@
 [deps]
 Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 BlockArrays = "8e7c35d0-a365-5155-bbbb-fb81a777f24e"
-Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+CUDSS = "45b445bb-4962-46a0-9369-b4df9d0f772e"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 LazySets = "b4f0291d-fe17-52bc-9479-3d1a343d9043"
@@ -17,4 +18,4 @@ TrajectoryGamesBase = "ac1ac542-73eb-4349-ae1b-660ab3609574"
 TrajectoryGamesExamples = "ff3fa34c-8d8f-519c-b5bc-31760c52507a"
 
 [sources]
-MixedComplementarityProblems = {path = ".."}
+MixedComplementarityProblems = {path = "../.."}

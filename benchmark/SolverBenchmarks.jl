@@ -11,6 +11,8 @@ using LazySets: LazySets
 using PATHSolver: PATHSolver
 using ProgressMeter: @showprogress
 using Symbolics: Symbolics
+using KernelAbstractions: KernelAbstractions
+using Adapt: Adapt
 
 abstract type BenchmarkType end
 struct QuadraticProgramBenchmark <: BenchmarkType end

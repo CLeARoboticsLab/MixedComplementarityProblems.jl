@@ -1,6 +1,6 @@
 name = "MixedComplementarityProblems"
 uuid = "6c9e26cb-9263-41b8-a6c6-f4ca104ccdcd"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["David Fridovich-Keil <dfk@utexas.edu>"]
 
 [deps]
@@ -16,7 +16,6 @@ LinearSolve = "7ed4a6bd-45f5-4d41-b270-4a48e9bafcae"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 SymbolicTracingUtils = "77ddf47f-b2ab-4ded-95ee-54f4fa148129"
-TrajectoryGamesBase = "ac1ac542-73eb-4349-ae1b-660ab3609574"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [weakdeps]
@@ -31,7 +30,7 @@ BlockArrays = "0.16.43, 1"
 CUDA = "5"
 CUDSS = "0.6, 0.7, 0.8"
 ChainRulesCore = "1.25.0"
-DataStructures = "0.18.20"
+DataStructures = "0.18.20, 0.19"
 FiniteDiff = "2.26.2"
 ForwardDiff = "0.10.38, 1"
 KLU = "0.6"
@@ -40,7 +39,6 @@ LinearAlgebra = "1.11.0"
 LinearSolve = "2.38.0, 3"
 SciMLBase = "2,3"
 SparseArrays = "1.11.0"
-SymbolicTracingUtils = "0.1.1"
-TrajectoryGamesBase = "0.3.10"
+SymbolicTracingUtils = "0.1.2, 0.2.0"
 Zygote = "0.6.73, 0.7"
 julia = "1.11"
