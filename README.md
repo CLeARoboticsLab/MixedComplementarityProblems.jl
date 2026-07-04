@@ -108,9 +108,122 @@ end
 ∇f = only(Zygote.gradient(f, θ))
 ```
 
+## Batched solving (CPU multithreading and GPU)
+
+Many applications need to solve a whole *batch* of MCPs that share the same structure but
+differ only in their parameters `θ` — e.g. sampling many initial conditions of a
+trajectory game, or sweeping many instances of a parameterized program. For this,
+`MixedComplementarityProblems` provides the `BatchedInteriorPoint` solver, which solves the
+entire batch in a single call, parallelized across CPU threads or an NVIDIA GPU via a
+single [`KernelAbstractions.jl`](https://github.com/JuliaGPU/KernelAbstractions.jl)
+backend. The unbatched `InteriorPoint` solver above is unchanged; the batched solver is a
+separate, additive entry point.
+
+Two things differ from the unbatched setup:
+
+1. Build the MCP with `compute_kernel_evaluators = true`. The batched solver needs these
+   device-portable evaluators, so they are opt-in (they add to build time).
+2. Stack your parameters into an `(nθ × B)` matrix `Θ`, where column `b` is the parameter
+   vector of instance `b` (`B` is the batch size).
+
+### CPU (multithreaded)
+
+Start Julia with several threads — `julia -t 4`. On heterogeneous CPUs (e.g. Apple
+silicon) use `-t <#performance-cores>`; oversubscribing past the physical performance
+cores plateaus or regresses throughput. Then, reusing the QP from the quickstart above:
+
+```julia
+using MixedComplementarityProblems
+
+M = [2 1; 1 2]
+A = [1 0; 0 1]
+b = [1; 1]
+
+G(x, y; θ) = M * x - θ - A' * y
+H(x, y; θ) = A * x - b
+
+# Note the `compute_kernel_evaluators = true`, required by the batched solver.
+mcp = MixedComplementarityProblems.PrimalDualMCP(
+    G,
+    H;
+    unconstrained_dimension = size(M, 1),
+    constrained_dimension = length(b),
+    parameter_dimension = size(M, 1),
+    compute_kernel_evaluators = true,
+)
+
+# Build a batch of B = 256 parameter vectors as an (nθ × B) matrix.
+B = 256
+Θ = rand(size(M, 1), B)   # column b is instance b's parameter vector
+
+sol = MixedComplementarityProblems.solve(
+    MixedComplementarityProblems.BatchedInteriorPoint(),
+    mcp,
+    Θ,
+)
+```
+
+The result is a named tuple `(; status, x, y, s, kkt_error, ϵ, outer_iters, total_iters)`.
+`status` is a length-`B` vector of `:solved` / `:failed`, and `x`, `y`, `s` are batched
+`(· × B)` matrices — column `b` is instance `b`'s solution. For example, the solution of
+instance 5 is `sol.x[:, 5]`, and `count(==(:solved), sol.status)` counts how many instances
+converged.
+
+The batched solver mirrors the unbatched schedule and accepts the same kinds of options,
+per-instance where appropriate — e.g. `tol`, warm starts (`X₀`, `Y₀`, `S₀`, with `Y₀`, `S₀`
+elementwise positive), and `regularize_linear_solve` (`:identity` default / `:internal` /
+`:none`). Trajectory games (built via `ParametricGame(...; compute_kernel_evaluators =
+true)`) are supported and solve with the default `:identity` scheme.
+
+> **Note on batches with hard/infeasible instances.** A batch typically mixes easy, hard,
+> and infeasible instances. Instances that neither converge nor diverge are declared
+> `:failed` and frozen after `max_stall_rounds` (default 5) consecutive non-converging
+> outer rounds, so a few stragglers do not drag the whole batch to the iteration ceiling.
+> Tune `max_stall_rounds` against your problem distribution.
+
+### GPU (NVIDIA, via cuDSS)
+
+The GPU path uses the exact same solver call — you only (1) load the CUDA/cuDSS extension,
+(2) move the parameter matrix to the device, and (3) pass `device = CUDABackend()`. The
+GPU backend is provided by a package extension that activates when both `CUDA` and `CUDSS`
+are loaded (both ship artifacts only for NVIDIA-capable platforms, so the base package
+loads and runs unchanged on non-NVIDIA machines):
+
+```julia
+using MixedComplementarityProblems
+using CUDA, CUDSS   # loading both activates the GPU (cuDSS) backend extension
+
+# `mcp` is built exactly as in the CPU example (compute_kernel_evaluators = true) — its
+# symbolic structure is device-independent, so the same MCP works on CPU and GPU.
+
+Θ_gpu = CuArray(Θ)   # move the (nθ × B) parameter matrix to the GPU
+
+sol = MixedComplementarityProblems.solve(
+    MixedComplementarityProblems.BatchedInteriorPoint(),
+    mcp,
+    Θ_gpu;
+    device = CUDA.CUDABackend(),
+)
+```
+
+The returned `x`, `y`, `s` live on the GPU (as `CuArray`s); bring them back with
+`Array(sol.x)` if you need them on the host.
+
+> If you would rather write device-generic code (one code path that runs on either CPU or
+> GPU), move parameters with `Adapt.adapt(device, Θ)` instead of `CuArray` — that is the
+> pattern the benchmarks use. `Adapt` is not a dependency of this package, so you would need
+> to add it to your own project (`] add Adapt`).
+
+> **Performance status (as of `v0.2.2`).** The GPU backend is functional but does **not**
+> yet consistently beat a many-threaded CPU run — on some problems it is at parity, and on
+> others (e.g. the trajectory game) it is currently slower, while both handily beat PATH.
+> This is under active investigation. See the [benchmarking
+> README](https://github.com/CLeARoboticsLab/MixedComplementarityProblems.jl/blob/main/benchmark/README.md)
+> and PR #54 for up-to-date numbers and discussion.
+
 ## A fancier demo
 
-If you'd like to get a better sense of the kinds of problems `MixedComplementarityProblems` was built for, check out the example in `examples/lane_change.jl`. This problem encodes a two-player game in which each player is driving a car and wishes to choose a trajectory that tracks a preferred lane center, maintains a desired speed, minimizes control actuation effort, and avoids collision with the other player. The problem is naturally expressed as a noncooperative game, and encoded as a mixed complementarity problem.
+If you would like to get a better sense of the kinds of problems `MixedComplementarityProblems` was built for, check out the example in `examples/lane_change.jl`. This problem encodes a two-player game in which each player is driving a car and wishes to choose a trajectory that tracks a preferred lane center, maintains a desired speed, minimizes control actuation effort, and avoids collision with the other player. The problem is naturally expressed as a noncooperative game, and encoded as a mixed complementarity problem.
 
 To run the example, activate the `examples` environment
 ```julia
