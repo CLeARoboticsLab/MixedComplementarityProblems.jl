@@ -50,6 +50,9 @@ function benchmark_gpu_vs_cpu(
         device = KernelAbstractions.CPU(),
         kwargs...,
     )
+    # Logged immediately (not deferred to `gpu_speedup_summary` at the very end) so a
+    # crash during the GPU run below (e.g. OOM) doesn't erase this already-computed result.
+    SolverBenchmarks.throughput_summary(data_cpu)
 
     @info "Running GPU batched throughput (reusing the CPU run's MCPs)..."
     data_gpu = SolverBenchmarks.benchmark_throughput(
@@ -60,6 +63,7 @@ function benchmark_gpu_vs_cpu(
         num_samples = data_cpu.num_samples,
         tol = data_cpu.tol,
     )
+    SolverBenchmarks.throughput_summary(data_gpu)
 
     (; cpu = data_cpu, gpu = data_gpu)
 end

@@ -76,10 +76,41 @@ than `(;)`, so `benchmark_throughput`'s own fast default still applies.
 as hard deps) for comparing `BatchedInteriorPoint` on `CUDABackend()` against CPU. It's
 kept out of the main `benchmark/Project.toml` because CUDA.jl/CUDSS.jl only ship artifacts
 for NVIDIA-capable platforms — this keeps the rest of `benchmark/` portable (e.g. to Apple
-Silicon). Run from an NVIDIA machine:
+Silicon). Three scripts, all run from an NVIDIA machine (`julia -t N --project=.`):
 
 ```julia
 julia> include("gpu_batched_benchmark.jl")
-julia> data = benchmark_gpu_vs_cpu(; num_samples = 4096);          # QP
+julia> data = benchmark_gpu_vs_cpu(; num_samples = 4096);          # single CPU-vs-GPU point
 julia> gpu_speedup_summary(data)
+
+julia> include("gpu_scaling_benchmark.jl")                          # sweep num_samples, fixed problem size
+julia> data = gpu_scaling_benchmark();
+julia> gpu_scaling_summary(data)
+
+julia> include("problem_size_scaling.jl")                           # sweep problem size, fixed num_samples
+julia> data = problem_size_scaling_benchmark();
+julia> problem_size_scaling_summary(data)
 ```
+
+**Current status (RTX 4090, as of 2026-07-04): GPU is not showing a speedup over 32 CPU
+threads, and in some regimes is meaningfully slower.** This is under active investigation,
+not a settled conclusion — see PR #54 for the up-to-date numbers and discussion. What's
+established so far:
+- A large fraction of `BatchedInteriorPoint`'s "straggler" cost (instances that neither
+  converge nor diverge, dragging every solve out to `max_outer_iters`) has been fixed via
+  `max_stall_rounds` in `src/batched_solver.jl` — this cut wall-clock 2.7-7x on both
+  devices, but *shrank* the apparent GPU advantage rather than growing it: a good chunk of
+  GPU's earlier apparent edge was actually GPU handling wasted iterations better than 32
+  CPU threads, not a genuine linear-algebra-backend advantage.
+- QP (`num_primals = 32, num_inequalities = 16`), post-fix: GPU/CPU ratio is close to
+  parity (0.5-1.4x) across batch sizes.
+- QP problem-size sweep (32/64/128 primals): non-monotonic — GPU wins at 128 primals
+  (up to 2.9x) but *loses* at 64 (0.6-0.8x). Confounded by the random QP generator's
+  solved-fraction changing sharply with `num_primals` (41% → 96% → 100%), which changes
+  how much of the total iteration budget stall-detection is cutting short at each size —
+  not yet a clean, isolated comparison.
+- Trajectory game (`horizon = 10`): GPU is consistently 3-3.7x **slower** than CPU across
+  all tested batch sizes, though both handily beat PATH (~20x).
+- `num_samples = 16384`+ currently OOMs for the trajectory game with an unexplained low
+  reported memory usage (~10%) at failure — not yet root-caused; dropped from the sweep
+  for now.

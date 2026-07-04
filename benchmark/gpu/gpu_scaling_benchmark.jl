@@ -105,6 +105,15 @@ function gpu_scaling_benchmark(
     points = map(num_samples_sweep) do n
         run_path_here = n <= path_max_samples
         @info "num_samples = $n: running GPU$(run_path_here ? " + PATH" : "")..."
+
+        # `extra...` (i.e. `problem_kwargs`) must be forwarded here too, even though
+        # `batched_mcp`/`path_mcp` are already built: `benchmark_throughput` calls
+        # `generate_test_problem`/`generate_random_parameter` UNCONDITIONALLY with
+        # `problem_kwargs` before checking whether an MCP was supplied, to regenerate the
+        # parameter vectors — omitting it here silently falls back to
+        # `benchmark_throughput`'s own QP-shaped default, which is wrong for other
+        # benchmark types (crashes loudly for `TrajectoryGameBenchmark`, since its
+        # `generate_test_problem` doesn't accept `num_primals`/`num_inequalities` at all).
         data_gpu = SolverBenchmarks.benchmark_throughput(
             benchmark_type;
             num_samples = n,
@@ -114,6 +123,7 @@ function gpu_scaling_benchmark(
             path_mcp,
             run_sequential_ip = false,
             run_path = run_path_here,
+            extra...,
         )
 
         data_cpu = if n <= cpu_max_samples
@@ -127,6 +137,7 @@ function gpu_scaling_benchmark(
                 path_mcp,
                 run_sequential_ip = false,
                 run_path = false,
+                extra...,
             )
         end
 

@@ -91,17 +91,25 @@ function problem_size_scaling_benchmark(;
             )
             p = (; num_samples = n, gpu = data_gpu.batched, cpu = data_cpu.batched)
             _log_point(problem_kwargs.num_primals, problem_kwargs.num_inequalities, p)
+
+            # Drop this point's now-dead cache/batched-state CuArrays and force a real
+            # reclaim before the NEXT `num_samples` (likely bigger) allocates its own —
+            # Julia's GC triggers on HOST allocation pressure, not GPU memory pressure,
+            # so without this, dead device memory from THIS point can sit unreclaimed
+            # while the next point's buffers are allocated on top of it. This must run
+            # HERE (inside the `num_samples` loop), not just once between problem sizes —
+            # otherwise memory can still pile up across several `num_samples` points
+            # within the SAME problem size before ever being reclaimed.
+            GC.gc()
+            CUDA.reclaim()
+
             p
         end
 
-        # Drop this size's now-dead MCP/cache/batched-state CuArrays and force a real
-        # reclaim before moving to a (likely bigger) size — Julia's GC triggers on HOST
-        # allocation pressure, not GPU memory pressure, so without this, dead device
-        # memory from THIS size can sit unreclaimed while the NEXT size's buffers are
-        # allocated on top of it, needlessly tightening the ceiling for larger sizes.
+        # Also drop this size's now-dead MCP (kernel-evaluator closures, sparsity
+        # pattern — host-side, but holding it past this point serves no purpose) before
+        # moving to the next (likely bigger) size.
         batched_mcp = nothing
-        GC.gc()
-        CUDA.functional() && CUDA.reclaim()
 
         (; problem_kwargs..., points)
     end
