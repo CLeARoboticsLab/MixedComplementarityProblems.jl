@@ -481,6 +481,16 @@ Returns `(; status, x, y, s, kkt_error, ϵ, outer_iters, total_iters)` where `st
 is a length-`B` vector of `:solved`/`:failed`, `x, y, s` are `(· × B)`, and
 `kkt_error, ϵ` are length-`B`.
 
+`max_stall_rounds` bounds how many CONSECUTIVE outer rounds an instance may fail to
+sub-converge before it is declared `:failed` and frozen. Without this, an instance that
+is merely stuck (not diverging, so `isfinite(kkt) & kkt ≤ 1e12` never trips) never
+becomes `done` and drags `outer` to `max_outer_iters` on every solve — costly on any
+device, and especially so on a GPU batched-sparse backend (e.g. cuDSS), which
+factorizes/solves the WHOLE batch every outer round regardless of how many instances are
+actually still active (`active`/`stepping` is a no-op there; see
+`ext/MixedComplementarityProblemsCUDSSExt.jl`). The default (5) is an untuned starting
+point, not a validated value — tune against your problem distribution.
+
 `mcp`'s kernel evaluators are `eval`'d closures (see the note in `src/mcp.jl`), so if
 `mcp` was constructed moments ago IN THE SAME calling frame (e.g. `mcp = PrimalDualMCP(...);
 solve(BatchedInteriorPoint(), mcp, Θ)` inside one function body), this whole call is
@@ -508,6 +518,7 @@ function _solve_batched(
     max_outer_iters = 50,
     tightening_rate = 0.1,
     loosening_rate = 0.5,
+    max_stall_rounds = 5,
     regularize_linear_solve::Symbol = :identity,
 )
     nx = mcp.unconstrained_dimension
@@ -558,6 +569,10 @@ function _solve_batched(
     # batch pay for re-factorizing the (many) already-converged instances every step.
     stepping = KernelAbstractions.zeros(device, Bool, B)
 
+    # Per-instance count of CONSECUTIVE outer rounds without sub-convergence (reset to 0
+    # the moment an instance sub-converges). Feeds the `max_stall_rounds` cutoff below.
+    stall_count = KernelAbstractions.zeros(device, Int, B)
+
     outer = 0
     total = 0
     while !all(done) && outer < max_outer_iters
@@ -603,12 +618,25 @@ function _solve_batched(
         # tol on its own schedule regardless of stragglers sharing the batch.
         subconverged = kkt .≤ ϵ
         converged .= converged .| (subconverged .& (ϵ .≤ tol))
-        # Terminate diverging / non-finite instances. With ∇F_z regularized, an infeasible
-        # instance no longer fast-fails (singular ⇒ NaN); it diverges instead and would
-        # otherwise hold the loop at max_inner × max_outer while the whole batch keeps
-        # getting re-factorized. Freezing it lets the loop exit once every instance is
-        # converged or failed.
-        failed .= failed .| .!isfinite.(kkt) .| (kkt .> 1e12)
+
+        # Stall detection: count CONSECUTIVE outer rounds a still-working instance has
+        # failed to sub-converge, reset to 0 the moment it does. `done` on the right-hand
+        # side is still last round's value here (updated below), so `.!done` is exactly
+        # "was still working entering this round". An instance stuck at the ϵ-ceiling
+        # (never sub-converging, but not diverging either — see the `isfinite`/`kkt>1e12`
+        # check below) would otherwise never become `done` and would drag `outer` to
+        # `max_outer_iters` on every solve; costly on any device, and especially so on a
+        # GPU batched-sparse backend (cuDSS), which factorizes/solves the WHOLE batch
+        # every outer round regardless of how many instances are actually still active.
+        stall_count .= ifelse.(.!done, ifelse.(subconverged, 0, stall_count .+ 1), stall_count)
+
+        # Terminate diverging / non-finite / stalled instances. With ∇F_z regularized, an
+        # infeasible instance no longer fast-fails (singular ⇒ NaN); it diverges instead
+        # and would otherwise hold the loop at max_inner × max_outer while the whole batch
+        # keeps getting re-factorized. Freezing it lets the loop exit once every instance
+        # is converged, failed, or stalled.
+        failed .=
+            failed .| .!isfinite.(kkt) .| (kkt .> 1e12) .| (stall_count .≥ max_stall_rounds)
         done .= converged .| failed
         tighten = @. 1 - exp(-tightening_rate * inner_count)
         loosen = @. 1 + exp(-loosening_rate * inner_count)
