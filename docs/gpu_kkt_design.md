@@ -211,8 +211,9 @@ Note: **no `CuArray`, no `lu`, no sparsity** appears in this loop. That's the go
   These kernel-safe evaluators (`mcp.F_kernel`, `mcp.∇F_z_kernel`, SerialForm + cse)
   are built opt-in at construction via `PrimalDualMCP(...; compute_kernel_evaluators =
   true)`, so CPU-only users pay no extra compile cost.
-  *(Validated end-to-end in `gpu_prototype/batched_eval.jl` and
-  `gpu_prototype/check_residual_jacobian.jl`.)*
+  *(Validated end-to-end via `ext/MixedComplementarityProblemsCUDSSExt.jl` and the
+  package test suite; the original `gpu_prototype/` exploration scripts this was first
+  validated against have since been removed.)*
 - **R4 — Regularization via `η` arg, not a separate verb.** `η` flows into
   `jacobian!`; internal-vs-additive is a per-strategy implementation detail.
 

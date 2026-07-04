@@ -52,6 +52,15 @@ Other notes:
     thereafter via `lu!`.
   • `active` (the CPU active-set optimization) is accepted but ignored: cuDSS's batched
     factorization always processes the whole batch, so there is nothing to skip.
+  • The FIRST `factorize!` manually replicates `LinearAlgebra.lu`'s internals (build
+    `CudssSolver` + `CudssMatrix`s, call the "analysis"/"factorization" phases) instead of
+    calling `lu()` directly, solely to set `"factorization_alg" = "algo1"` beforehand —
+    `lu()` doesn't expose a way to pass config through. Verified empirically (both the QP
+    and trajectory-game benchmarks, `benchmark/gpu/`): `algo1` gives identical
+    `outer_iters`/`total_iters`/solved-counts (same numerics) as the default algorithm,
+    while being 10-17% faster end-to-end. `algo2`-`algo5` are either unsupported for this
+    matrix structure (`CUDSS_STATUS_NOT_SUPPORTED`) or slower; `reordering_alg`/
+    `use_superpanels` were also swept and found not to help (see PR discussion).
 ────────────────────────────────────────────────────────────────────────────────────
 """
 module MixedComplementarityProblemsCUDSSExt
@@ -101,7 +110,19 @@ function MCP.factorize!(cache::BatchedSparseCache{<:CUDA.CUDABackend}; active = 
     pattern = cache.pattern
     pattern.nzval_csr .= view(cache.nzval, pattern.perm, :)
     if cache.factor[] === nothing
-        cache.factor[] = LinearAlgebra.lu(pattern.A)
+        # Manually replicates `LinearAlgebra.lu(pattern.A)` (see the module docstring)
+        # solely to set `factorization_alg = "algo1"` first, which isn't reachable through
+        # the `lu()` convenience wrapper.
+        d = size(pattern.A, 1)
+        nbatch = length(pattern.A.nzVal) ÷ length(pattern.A.colVal)
+        solver = CUDSS.CudssSolver(pattern.A, "G", 'F')
+        (nbatch > 1) && CUDSS.cudss_set(solver, "ubatch_size", nbatch)
+        CUDSS.cudss_set(solver, "factorization_alg", "algo1")
+        x = CUDSS.CudssMatrix(Float64, d; nbatch)
+        b = CUDSS.CudssMatrix(Float64, d; nbatch)
+        CUDSS.cudss("analysis", solver, x, b; asynchronous = true)
+        CUDSS.cudss("factorization", solver, x, b; asynchronous = false)
+        cache.factor[] = solver
     else
         LinearAlgebra.lu!(cache.factor[], pattern.A)
     end

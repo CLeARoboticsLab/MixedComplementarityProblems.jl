@@ -4,7 +4,7 @@ Benchmarking `MixedComplementarityProblems` solver(s) against PATH.
 
 ## Instructions
 
-This directory provides code to benchmark the `InteriorPoint` solver against `PATH`, accessed via `ParametricMCPs` and `PATHSolver`. Currently, we provide two different benchmark problems: (i) a set of randomly-generated sparse quadratic programs with user-specified numbers of primal variables and inequality constraints, and (ii) the lane changing trajectory game from `examples/`, with initial conditions randomized. To run (with the REPL activated within this directory):
+This directory provides code to benchmark the `InteriorPoint` solver against `PATH`, accessed via `ParametricMCPs` and `PATHSolver`. Currently, we provide two different benchmark problems: (i) a set of randomly-generated sparse quadratic programs with user-specified numbers of primal variables and inequality constraints, and (ii) the lane changing trajectory game from `examples/`, with initial conditions randomized around a fixed canonical merge scenario (see "Trajectory game sampling" below). To run (with the REPL activated within this directory):
 
 ```julia
 julia> include("SolverBenchmarks.jl")
@@ -70,6 +70,29 @@ regresses throughput rather than continuing to scale, unlike a GPU. Pass `proble
 explicitly (see the caveat above); the default is deliberately `nothing` (omitted) rather
 than `(;)`, so `benchmark_throughput`'s own fast default still applies.
 
+## Trajectory game sampling & warm start
+
+`TrajectoryGameBenchmark`'s `generate_random_parameter` samples initial positions from a
+small rectangle around a fixed canonical merge scenario (P1 stays in the leftmost lane,
+P2 merges in from the rightmost lane), rather than uniformly over the whole road — see
+its docstring in `trajectory_game_benchmark.jl` for the full rationale. Two things worth
+knowing if you touch this benchmark:
+- **`lead_offset`/`lead_vy_boost`/`initial_vy` are load-bearing, not cosmetic.** Both
+  players share the same lane preference, so the only feasible equilibria are "P1 leads"
+  or "P2 leads" — a symmetric, essentially discrete choice. Sampling both players
+  symmetrically leaves that choice ambiguous at the initial guess, which makes the
+  Newton-based complementarity solver oscillate between the two candidate equilibria
+  instead of converging — this is *why* `solved` fraction used to collapse at longer
+  horizons (down to 0% at `horizon = 100`), independent of `height`/road length (that was
+  the first, disproven hypothesis). Giving P2 a head start and higher rollout velocity
+  breaks the symmetry and recovers most of the solved fraction (see numbers below).
+- **`generate_initial_guess` supplies `BatchedInteriorPoint`'s `X₀`** with a zero-input
+  rollout (dynamics-aware, via the same `zero_input_trajectory`/`pack_trajectory` helpers
+  `examples/lane_change.jl`'s receding-horizon strategy uses) instead of the solver's
+  default all-zero cold start. This is dispatched per `benchmark_type` and wired into
+  `benchmark_throughput` automatically — the sampling fix alone (without this) recovers
+  only a fraction of the solved-fraction gain.
+
 ## GPU vs CPU (`benchmark/gpu/`)
 
 `benchmark/gpu/` is a **separate environment** (its own `Project.toml`, with `CUDA`/`CUDSS`
@@ -92,25 +115,44 @@ julia> data = problem_size_scaling_benchmark();
 julia> problem_size_scaling_summary(data)
 ```
 
-**Current status (RTX 4090, as of 2026-07-04): GPU is not showing a speedup over 32 CPU
-threads, and in some regimes is meaningfully slower.** This is under active investigation,
-not a settled conclusion — see PR #54 for the up-to-date numbers and discussion. What's
-established so far:
-- A large fraction of `BatchedInteriorPoint`'s "straggler" cost (instances that neither
-  converge nor diverge, dragging every solve out to `max_outer_iters`) has been fixed via
-  `max_stall_rounds` in `src/batched_solver.jl` — this cut wall-clock 2.7-7x on both
-  devices, but *shrank* the apparent GPU advantage rather than growing it: a good chunk of
-  GPU's earlier apparent edge was actually GPU handling wasted iterations better than 32
-  CPU threads, not a genuine linear-algebra-backend advantage.
-- QP (`num_primals = 32, num_inequalities = 16`), post-fix: GPU/CPU ratio is close to
-  parity (0.5-1.4x) across batch sizes.
-- QP problem-size sweep (32/64/128 primals): non-monotonic — GPU wins at 128 primals
-  (up to 2.9x) but *loses* at 64 (0.6-0.8x). Confounded by the random QP generator's
-  solved-fraction changing sharply with `num_primals` (41% → 96% → 100%), which changes
-  how much of the total iteration budget stall-detection is cutting short at each size —
-  not yet a clean, isolated comparison.
-- Trajectory game (`horizon = 10`): GPU is consistently 3-3.7x **slower** than CPU across
-  all tested batch sizes, though both handily beat PATH (~20x).
+**Current status (RTX 4090, as of 2026-07-04): GPU beats 32 CPU threads by a consistent
+2.5-2.8x on the trajectory game once the per-instance problem is large enough (`horizon
+≳ 30`, KKT dimension `d ≳ 2000`); below that, and for small dense QPs at small batch
+sizes, CPU is still faster or roughly at parity.** The headline number depends heavily on
+*which* regime you're in — see the breakdown below rather than quoting a single ratio.
+
+- **cuDSS tuning:** `factorization_alg = "algo1"` (set manually in
+  `ext/MixedComplementarityProblemsCUDSSExt.jl`, since `LinearAlgebra.lu()`'s convenience
+  wrapper doesn't expose it) gives a verified 10-17% speedup with byte-for-byte identical
+  solve behavior (same `outer_iters`/`total_iters`/solved-counts) on both benchmarks.
+  `algo2`-`algo5` are unsupported or slower; `reordering_alg`/`use_superpanels` don't help.
+- **Stall detection** (`max_stall_rounds` in `src/batched_solver.jl`) cut wall-clock
+  2.7-7x on both devices by ending instances that neither converge nor diverge instead of
+  dragging every solve to `max_outer_iters` — necessary groundwork, but on its own it
+  *shrank* GPU's apparent advantage rather than growing it (GPU was previously winning
+  partly by handling wasted iterations better, not via a genuine linear-algebra edge).
+- **Why GPU wins at larger `horizon`:** raw per-instance `jacobian!+factorize!` cost
+  crosses over in GPU's favor right around `d ≈ 3500` (`horizon ≈ 50`) — confirmed by
+  isolated, apples-to-apples timing at fixed batch size, independent of solved fraction
+  or iteration count. `outer_iters` stays flat (9-16) across `horizon = 10..100`, so this
+  is **not** explained by `BatchedInteriorPoint`'s CPU-only active-set skip (which would,
+  if anything, favor CPU *more* as harder instances drop out early) — it's cuDSS's batched
+  factorization getting relatively cheaper per instance as the matrix grows, amortizing
+  its kernel-launch/occupancy overhead better than CPU's per-thread KLU factorization.
+- **Trajectory game, with the sampling/warm-start fix above** (`N = 1024`, `height = 50`):
+  GPU/CPU wall-clock ratio is 2.68x (`horizon=30`), 2.50x (`horizon=50`), 2.48x
+  (`horizon=70`), 2.81x (`horizon=100`) — consistently GPU-favorable. Solved fraction is
+  92% (`horizon=30`), 57% (`horizon=50`), 34-36% (`horizon=70`), 23-25% (`horizon=100`) —
+  a large improvement over the pre-fix collapse (as low as 0% at `horizon=100`), but still
+  short of a "realistic, high-confidence" benchmark at `horizon ≳ 50`; further tuning
+  (larger `lead_offset`/`lead_vy_boost`, or a genuinely better warm start) is still open.
+- At `horizon ≤ 20` (small `d`), CPU remains faster (GPU 2-2.5x slower) — GPU only pulls
+  ahead once there's enough per-instance work to amortize its overhead.
+- QP (small, dense, `num_primals = 32, num_inequalities = 16`): GPU/CPU ratio close to
+  parity (0.5-1.4x) across batch sizes; problem-size sweep (32/64/128 primals) is
+  non-monotonic (GPU wins at 128 primals, up to 2.9x, but loses at 64, 0.6-0.8x) —
+  confounded by the random QP generator's solved-fraction changing sharply with
+  `num_primals` (41% → 96% → 100%), not yet a clean isolated comparison.
 - `num_samples = 16384`+ currently OOMs for the trajectory game with an unexplained low
   reported memory usage (~10%) at failure — not yet root-caused; dropped from the sweep
   for now.
