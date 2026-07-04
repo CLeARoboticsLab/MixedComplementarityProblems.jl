@@ -5,6 +5,8 @@
 
 This package provides an easily-customizable interface for expressing mixed complementarity problems (MCPs) which are defined in terms of an arbitrary vector of parameters. `MixedComplementarityProblems` implements a reasonably high-performance interior point method for solving these problems, and integrates with `ChainRulesCore` and `ForwardDiff` to enable automatic differentiation of solutions with respect to problem parameters.
 
+As of `v0.2.2`, `MixedComplementarityProblems.jl` implements CPU multithreading and GPU-parallelized solvers as well, enabled via `KernelAbstractions.jl`. Check out the benchmarking README [here](https://github.com/CLeARoboticsLab/MixedComplementarityProblems.jl/blob/main/benchmark/README.md) for more details.
+
 ## What are MCPs?
 
 Mixed complementarity problems (MCPs) are a class of mathematical program, and they arise in a wide variety of application problems. In particular, one way they can arise is via the KKT conditions of nonlinear programs and noncooperative games. This package provides a utility for constructing MCPs from (parameterized) games, cf. `src/game.jl` for further details. To see the connection between KKT conditions and MCPs, read the next section.
