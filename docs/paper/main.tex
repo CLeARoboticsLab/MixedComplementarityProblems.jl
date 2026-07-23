@@ -8,6 +8,13 @@
 \usepackage[hidelinks]{hyperref}
 \usepackage{xcolor}
 
+\usepackage[capitalize,noabbrev,nameinlink]{cleveref}
+\crefformat{equation}{(#2#1#3)}
+\Crefname{algocfline}{Algorithm}{Algorithms}
+\Crefname{algocf}{line}{lines}
+\Crefname{assumption}{Assumption}{Assumptions}
+\crefrangeformat{assumption}{Assumptions~#3#1#4-#5#2#6}
+
 % Flags a claim, number, or section that must be revisited once final benchmark
 % results are in. Renders inline, in color, so it is impossible to miss in a draft
 % but is meant to be resolved (never shipped) before the report is finalized.
@@ -15,7 +22,7 @@
 
 \begin{document}
 
-\title{\Large MixedComplementarityProblems.jl: A Fast, Batched, Open-Source
+\title{\Large \bf MixedComplementarityProblems.jl: A Fast, Batched, Open-Source
 Interior-Point Solver for Mixed Complementarity Problems}
 
 \author{
@@ -62,83 +69,55 @@ Interior-Point Solver for Mixed Complementarity Problems}
 Mixed complementarity problems (MCPs) arise as the first-order optimality conditions of
 nonlinear programs and noncooperative games, and give a natural formulation for the
 multi-agent trajectory optimization problems that appear throughout robotics. The
-dominant solver for problems of this form is \textsf{PATH}, a mature but closed-source
-package. We present \textsf{MixedComplementarityProblems.jl}, an open-source, pure
+dominant solver for problems of this form is \texttt{PATH}, a mature but closed-source
+package. We present \texttt{MixedComplementarityProblems.jl}, an open-source, pure
 Julia implementation of an interior-point method for parametric MCPs that (i) matches
-\textsf{PATH}'s reliability on standard benchmarks and (ii) natively supports batched
+\texttt{PATH}'s reliability on standard benchmarks and (ii) natively supports batched
 solving, in which many parameter instances are solved simultaneously and in parallel,
 either across CPU threads or on an NVIDIA GPU, behind a single solver implementation.
 On a multi-agent lane-change trajectory game representative of robotics planning
 problems, our CPU-multithreaded batched solver clears a batch of parametric instances
-60--80$\times$ faster than sequential calls to \textsf{PATH}, and our GPU backend
-clears the same batches roughly $20\times$ faster than \textsf{PATH}\todo{finalize the
+60--80$\times$ faster than sequential calls to \texttt{PATH}, and our GPU backend
+clears the same batches roughly $20\times$ faster than \texttt{PATH} \todo{finalize the
 GPU-vs-CPU comparison for the trajectory game once the latest benchmark numbers are
 in---earlier runs showed GPU trailing CPU here, but that may no longer hold}. We
 describe the solver's interior-point formulation, the abstraction that lets a single
 solver implementation run unmodified across dense, batched-sparse, and single-large
-linear-algebra backends, and report benchmarks against \textsf{PATH} on both randomly
+linear-algebra backends, and report benchmarks against \texttt{PATH} on both randomly
 generated quadratic programs and trajectory games.
 \end{abstract}
 
 \section{Introduction}
 \label{sec:intro}
 
-Multi-agent trajectory planning problems in robotics---lane changes and merges,
-intersection negotiation, racing, human-robot interaction---are naturally posed as
+Multi-agent trajectory planning problems in robotics, ranging from autonomous driving to human-robot interaction, are naturally posed as
 noncooperative dynamic games, in which each agent optimizes its own trajectory subject
-to the others' choices. The first-order (KKT) conditions of such a game, and of the
-constrained trajectory optimization problems that underlie it, take the form of a
-mixed complementarity problem (MCP). MCPs are therefore not a peripheral formalism for
-this class of problems; they are the computational object that planners in this space
-ultimately have to solve, often many times per planning cycle.
+to the others' choices. The first-order necessary conditions of optimality for each agent in the game take the form of a
+mixed complementarity problem (MCP). Solving MCPs rapidly, therefore, becomes a core computational burden for real-time decision-making in multi-agent robotics applications.
 
-The dominant solver for problems of this form is \textsf{PATH}~\cite{dirkse1995path}, accessed
-from Julia through the \texttt{PATHSolver.jl}/\texttt{ParametricMCPs.jl} stack. \textsf{PATH}
-is mature and reliable, but it is closed-source, solves one parameter instance at a
-time, and was not designed to sit inside a differentiable pipeline or underneath an
-outer loop that itself needs to be parallelized. That is a real limitation for the
-workloads robotics increasingly relies on: scenario- or sampling-based planning,
-receding-horizon replanning across many candidate initial conditions, and learning
-formulations that differentiate through a game's equilibrium. Each of these needs many
-structurally identical MCPs solved together, not one instance solved in isolation.
+The dominant solver for this class of problems is \textsf{PATH}~\cite{dirkse1995path}. \textsf{PATH}
+is mature, reliable, and widely used; but, it is closed-source, solves one problem instance at a
+time, and was not designed to support automatic differentiation of solutions with respect to problem parameters.
+All three pose serious, practical limitations for use in robotics: (i) developers must have access to solver internals in order to customize to the problem at hand, (ii) scenario- and contingency-based planning (e.g., \cite{li2023scenario,peters2024contingency}) requires solving a \emph{batch} of identically-structured but differently \emph{parameterized} problems, and (iii) modern machine learning pipelines often embed optimization problem solvers as ``layers'' \cite{amos2017optnet}, and end-to-end differentiability requires us to be able to differentiate a solver's output with respect to its input parameters.
 
-No existing tool combines an open, modifiable solver with native support for solving
-many such instances at once, in parallel, on the hardware a robotics practitioner
-already has. Interior-point methods are a natural fit for closing this gap: they are
-simple enough to reimplement and adapt to a new application, they are straightforward
-to differentiate through, and their dominant per-iteration cost---a linear solve
-against the KKT system---parallelizes cleanly across a batch of instances that share a
-common sparsity structure, whether that parallelism is spread across CPU threads or
-onto a GPU.
-
-We present \textsf{MixedComplementarityProblems.jl}, an open-source, pure Julia
-interior-point solver for parametric MCPs. Concretely, we contribute:
+We present \textsf{MixedComplementarityProblems.jl}, an open-source, pure Julia solver for parametric MCPs that addresses all of these practical challenges. Concretely, we contribute:
 \begin{itemize}
-  \item An interior-point method for parametric MCPs that matches \textsf{PATH}'s
-  reliability on standard benchmarks, while remaining a compact, modifiable, pure
-  Julia implementation that differentiates through its own solutions via
-  \texttt{ChainRulesCore}/\texttt{ForwardDiff}.
+  \item A simple and easily-customized interior-point method for parametric MCPs that matches \textsf{PATH}'s
+  reliability on standard benchmarks, while supporting automatic differentiation of solutions with respect to problem parameters.
   \item A native \emph{batched} solve mode, in which many parameter instances sharing
   one MCP structure are solved simultaneously, parallelized across CPU threads or an
   NVIDIA GPU behind a single solver implementation.
-  \item An abstraction boundary---a small verb set (residual, Jacobian assembly,
-  factorize, solve) between the interior-point loop and its linear-algebra
-  backend---that lets that one implementation run unmodified across dense,
+  \item An abstraction boundary defined by a small verb set that separates the interior-point loop and its linear algebra
+  backend, which lets a single solver implementation run unmodified across dense,
   batched-sparse, and single-large-instance regimes, so that supporting a new device or
   linear-algebra strategy never requires touching the solver loop itself.
 \end{itemize}
 
-As Fig.~\ref{fig:teaser} previews and Section~\ref{sec:experiments} quantifies, on a
+As \cref{fig:teaser} previews and \cref{sec:experiments} quantifies, on a
 multi-agent lane-change trajectory game representative of robotics planning problems,
 clearing a batch of parametric instances with our batched solver takes a small fraction
 of the wall-clock time required to clear the same batch with sequential calls to
-\textsf{PATH}. The rest of this report is organized as follows.
-Section~\ref{sec:background} reviews MCPs and their connection to KKT conditions and
-games. Section~\ref{sec:design} describes the interior-point method and its
-strategy/device abstraction. Section~\ref{sec:batched} details the batched CPU and GPU
-backends. Section~\ref{sec:experiments} reports benchmarks against \textsf{PATH} on
-quadratic programs and trajectory games. Section~\ref{sec:discussion} discusses
-limitations and future work.
+\texttt{PATH}. \todo{replace with the top-line numerical speedup results when they are finalized}
 
 \section{Background: Mixed Complementarity Problems}
 \label{sec:background}
