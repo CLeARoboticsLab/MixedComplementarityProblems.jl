@@ -1,6 +1,7 @@
 \documentclass[conference]{IEEEtran}
 
 \usepackage{amsmath,amssymb}
+\usepackage{mathtools}
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{cite}
@@ -121,7 +122,91 @@ of the wall-clock time required to clear the same batch with sequential calls to
 
 \section{Background: Mixed Complementarity Problems}
 \label{sec:background}
-TODO
+
+\subsection{Problem definition}
+\label{sec:background:def}
+
+A mixed complementarity problem is specified by a map $F:\mathbb{R}^n\to\mathbb{R}^n$
+and bounds $\ell,u\in(\mathbb{R}\cup\{\pm\infty\})^n$; a solution is a vector
+$z\in\mathbb{R}^n$ satisfying, for every $i$,
+\begin{equation}
+  \begin{aligned}
+    \ell_i < z_i < u_i &\implies F_i(z) = 0, \\
+    z_i = \ell_i &\implies F_i(z) \ge 0, \\
+    z_i = u_i &\implies F_i(z) \le 0.
+  \end{aligned}
+  \label{eq:mcp-box}
+\end{equation}
+\todo{add reference} surveys this general form and its applications. Two special
+cases of \cref{eq:mcp-box} recur throughout this report: an unconstrained block
+($\ell_i=-\infty$, $u_i=\infty$), where \cref{eq:mcp-box} reduces to $F_i(z)=0$; and a
+nonnegativity block ($\ell_i=0$, $u_i=\infty$), where it reduces to the complementarity
+condition $0\le z_i \perp F_i(z)\ge 0$.
+
+\subsection{MCPs from KKT conditions}
+\label{sec:background:kkt}
+
+Consider a parametric nonlinear program
+\begin{equation}
+  \min_{x} \; f(x;\theta) \quad \text{s.t.} \quad h(x;\theta) \ge 0,
+  \label{eq:nlp}
+\end{equation}
+with primal variables $x\in\mathbb{R}^{n_x}$, parameters $\theta$, and Lagrange
+multipliers $y\in\mathbb{R}^{n_y}$ associated with $h$. The KKT conditions of
+\cref{eq:nlp} are
+\begin{equation}
+  \begin{aligned}
+    G(x,y;\theta) &\coloneqq \nabla_x f(x;\theta) - \nabla_x h(x;\theta)^\top y = 0, \\
+    0 \le y \perp H(x,y;\theta) &\coloneqq h(x;\theta) \ge 0,
+  \end{aligned}
+  \label{eq:primal-dual-mcp}
+\end{equation}
+which is exactly an instance of \cref{eq:mcp-box} with $z=(x,y)$: an unconstrained
+block $G$ paired with $x$, and a nonnegativity block $H$ paired with $y$. We refer to
+\cref{eq:primal-dual-mcp} as the \emph{primal-dual} form; it is the only form
+\texttt{MixedComplementarityProblems.jl} exposes, since every MCP we construct in this
+report arises from an optimization problem or a game rather than from a raw box
+constraint.
+
+\subsection{MCPs from noncooperative games}
+\label{sec:background:games}
+
+The reduction in \cref{sec:background:kkt} extends from one decision-maker to many.
+Consider $N$ agents, where agent $i$ solves
+\begin{equation}
+  \min_{x_i} \; f_i(x_i, x_{-i};\theta) \quad \text{s.t.} \quad h_i(x_i,x_{-i};\theta)
+  \ge 0, \; c(x;\theta) \ge 0,
+\end{equation}
+subject to its own constraints $h_i$ and to constraints $c$ shared across agents
+(e.g., pairwise collision avoidance), where $x_{-i}$ denotes the other agents'
+decisions and $x=(x_1,\dots,x_N)$. Writing out each agent's KKT conditions as in
+\cref{eq:primal-dual-mcp} and stacking them --- with the shared constraints $c$
+coupling agents through a shared multiplier --- yields a single primal-dual MCP whose
+solution is a generalized Nash equilibrium: a strategy profile from which no agent can
+unilaterally improve its own objective. \todo{add reference} treats this class of
+problems, generalized Nash equilibrium problems (GNEPs), in general;~\cite{li2023scenario,peters2024contingency}
+apply this same MCP reduction to multi-agent trajectory games in robotics.
+
+The lane-change trajectory game of \cref{fig:teaser}(a) is a concrete instance of this
+family: two vehicles, each minimizing a cost trading off lane-keeping, speed tracking,
+and control effort, coupled by a pairwise collision-avoidance constraint. We use this
+game as a running example for the remainder of this report. A \emph{batch}, in the
+sense of \cref{sec:batched}, is a set of instances of this same game that share
+structure but differ in parameters $\theta$ --- e.g., the vehicles' initial positions,
+velocities, or lane preferences.
+
+\subsection{The parametric view}
+\label{sec:background:parametric}
+
+Sections~\ref{sec:background:kkt} and~\ref{sec:background:games} both produce a
+\emph{family} of MCPs indexed by parameters $\theta$ rather than a single problem
+instance, which we write $\mathrm{MCP}(\theta)$, with solution map
+$z^*(\theta)=(x^*(\theta),y^*(\theta))$. Treating $\theta$ as first-class, rather than
+building a solver around one fixed problem instance, is what licenses the two
+capabilities central to this report: solving $z^*(\theta)$ for many values of $\theta$
+at once, in parallel (\cref{sec:batched}), and differentiating the solution map itself,
+$\nabla_\theta z^*(\theta)$, so that an MCP solve can act as a layer inside a larger
+differentiable pipeline~\cite{amos2017optnet}.
 
 \section{Solver Design}
 \label{sec:design}
