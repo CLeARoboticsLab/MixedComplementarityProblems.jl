@@ -51,17 +51,17 @@ Interior-Point Solver for Mixed Complementarity Problems}
   \fbox{%
     \begin{minipage}[c][0.30\textheight][c]{0.47\textwidth}
       \centering
-      \todo{replace with wall-clock-vs-batch-size plot: \textsf{PATH} (serial),
+      \todo{replace with wall-clock-vs-batch-size plot: \texttt{PATH} (serial),
       CPU-batched, and GPU-batched, log-scaled $y$-axis}\\[1em]
-      \textbf{(b)} Clearing that batch: sequential \textsf{PATH} calls versus our
+      \textbf{(b)} Clearing that batch: sequential \texttt{PATH} calls versus our
       batched CPU and GPU solves.
     \end{minipage}%
   }
   \caption{\todo{finalize caption once the real figure is in} Solving a batch of
   parametric trajectory-game instances (a) with
-  \textsf{MixedComplementarityProblems.jl}'s batched interior-point solver is
+  \texttt{MixedComplementarityProblems.jl}'s batched interior-point solver is
   substantially faster than solving the same batch with sequential calls to
-  \textsf{PATH} (b).}
+  \texttt{PATH} (b).}
   \label{fig:teaser}
 \end{figure*}
 
@@ -95,14 +95,14 @@ noncooperative dynamic games, in which each agent optimizes its own trajectory s
 to the others' choices. The first-order necessary conditions of optimality for each agent in the game take the form of a
 mixed complementarity problem (MCP). Solving MCPs rapidly, therefore, becomes a core computational burden for real-time decision-making in multi-agent robotics applications.
 
-The dominant solver for this class of problems is \textsf{PATH}~\cite{dirkse1995path}. \textsf{PATH}
+The dominant solver for this class of problems is \texttt{PATH}~\cite{dirkse1995path}. \texttt{PATH}
 is mature, reliable, and widely used; but, it is closed-source, solves one problem instance at a
 time, and was not designed to support automatic differentiation of solutions with respect to problem parameters.
 All three pose serious, practical limitations for use in robotics: (i) developers must have access to solver internals in order to customize to the problem at hand, (ii) scenario- and contingency-based planning (e.g., \cite{li2023scenario,peters2024contingency}) requires solving a \emph{batch} of identically-structured but differently \emph{parameterized} problems, and (iii) modern machine learning pipelines often embed optimization problem solvers as ``layers'' \cite{amos2017optnet}, and end-to-end differentiability requires us to be able to differentiate a solver's output with respect to its input parameters.
 
-We present \textsf{MixedComplementarityProblems.jl}, an open-source, pure Julia solver for parametric MCPs that addresses all of these practical challenges. Concretely, we contribute:
+We present \texttt{MixedComplementarityProblems.jl}, an open-source, pure Julia solver for parametric MCPs that addresses all of these practical challenges. Concretely, we contribute:
 \begin{itemize}
-  \item A simple and easily-customized interior-point method for parametric MCPs that matches \textsf{PATH}'s
+  \item A simple and easily-customized interior-point method for parametric MCPs that matches \texttt{PATH}'s
   reliability on standard benchmarks, while supporting automatic differentiation of solutions with respect to problem parameters.
   \item A native \emph{batched} solve mode, in which many parameter instances sharing
   one MCP structure are solved simultaneously, parallelized across CPU threads or an

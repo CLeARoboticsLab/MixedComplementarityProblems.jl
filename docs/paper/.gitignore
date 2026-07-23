@@ -8,3 +8,4 @@
 *.fls
 missfont.log
 build.log
+auto/
