@@ -21,6 +21,20 @@
 % but is meant to be resolved (never shipped) before the report is finalized.
 \newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
 
+% A recurring, visually set-off instance of the running example (the lane-change
+% trajectory game), so later sections (e.g. batched construction) can reuse the same
+% box without redefining it as a new figure/table each time.
+\newenvironment{runningexample}[1]{%
+  \begin{center}
+  \colorbox{black!7}\bgroup
+  \begin{minipage}{0.95\columnwidth}
+  \textbf{Running example (#1).}
+}{%
+  \end{minipage}
+  \egroup
+  \end{center}
+}
+
 \begin{document}
 
 \title{\Large \bf MixedComplementarityProblems.jl: A Fast, Batched, Open-Source
@@ -139,7 +153,7 @@ $z\in\mathbb{R}^n$ satisfying, for every coordinate dimension $i$,
 \end{equation}
 Readers are referred to \cite{facchinei2003finite} for a complete introduction to MCPs and related problems.
 
-\subsection{MCPs from KKT conditions and noncooperative games}
+\subsection{MCPs from KKT conditions}
 \label{sec:background:kkt}
 
 Consider a parametric nonlinear program
@@ -173,8 +187,8 @@ Consider $N$ agents, where agent $i$ solves
 \begin{subequations}
 \begin{align}
   &\forall i \begin{cases}
-  	\min_{x_i} \; f_i(x_i, x_{-i};\theta) \\
-  	\text{s.t.} \quad g_i(x_i, x_{\neg i}; \theta) = 0,~ h_i(x_i,x_{-i};\theta) \ge 0
+  	\min_{x_i} \; f_i(x_i, x_{\neg i};\theta) \\
+  	\text{s.t.} \quad g_i(x_i, x_{\neg i}; \theta) = 0,~ h_i(x_i,x_{\neg i};\theta) \ge 0
   \end{cases}\\
   &\text{s.t.} \quad \; g_\mathrm{sh}(x;\theta) = 0,~ h_\mathrm{sh}(x; \theta) \ge 0,
 \end{align}
@@ -188,6 +202,30 @@ coupling agents through shared multipliers $\lambda_\mathrm{sh}, \mu_\mathrm{sh}
 solution is a generalized Nash equilibrium: a strategy profile from which no agent can
 unilaterally improve its own objective \cite{facchinei2003finite}.
 
+Concretely, concatenate the agents' primal variables as $x=(x_1,\dots,x_N)$ and their
+private multipliers as $\lambda_\mathrm{priv}=(\lambda_1,\dots,\lambda_N)$,
+$\mu_\mathrm{priv}=(\mu_1,\dots,\mu_N)$, and append a single pair of shared multipliers
+$\lambda_\mathrm{sh},\mu_\mathrm{sh}$ --- common to \emph{every} agent's stationarity
+condition, rather than duplicated per agent, as is standard when seeking a variational
+(normalized) equilibrium \cite{facchinei2003finite} --- so that agent $i$'s Lagrangian
+is $L_i \coloneqq f_i - \lambda_i^\top g_i - \mu_i^\top h_i - \lambda_\mathrm{sh}^\top
+g_\mathrm{sh} - \mu_\mathrm{sh}^\top h_\mathrm{sh}$. The concatenated system is again an
+instance of \cref{eq:primal-dual-mcp}, with
+\begin{equation}
+  \begin{aligned}
+    G &\coloneqq \left(\nabla_{x_1} L_1, \dots, \nabla_{x_N} L_N, g_1,\dots,g_N,
+    g_\mathrm{sh}\right), \\
+    H &\coloneqq \left(h_1,\dots,h_N,h_\mathrm{sh}\right),
+  \end{aligned}
+  \label{eq:game-mcp}
+\end{equation}
+with $G$ and $H$ each a function of the full concatenated primal and dual variables
+and $\theta$. Every agent's stationarity block $\nabla_{x_i}L_i$ depends on the shared
+multipliers
+$\lambda_\mathrm{sh},\mu_\mathrm{sh}$ in addition to its own $\lambda_i,\mu_i$, which is
+exactly what couples the agents' otherwise-separate KKT systems into one game.
+
+\begin{runningexample}{lane-change trajectory game}
 The lane-change trajectory game of \cref{fig:teaser}(a) is a concrete instance of this
 family: two vehicles, each minimizing a cost trading off lane-keeping, speed tracking,
 and control effort, coupled by a pairwise collision-avoidance constraint. We use this
@@ -195,6 +233,7 @@ game as a running example for the remainder of this report. A \emph{batch}, in t
 sense of \cref{sec:batched}, is a set of instances of this same game that share
 structure but differ in parameters $\theta$---e.g., the vehicles' initial positions,
 velocities, or lane preferences.
+\end{runningexample}
 
 \section{Solver Design}
 \label{sec:design}
