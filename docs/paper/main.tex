@@ -175,7 +175,7 @@ multipliers $\lambda \in \mathbb{R}^{n_\lambda}$ associated with the equality co
   \end{align}
 \end{subequations}
 
-Problem \cref{eq:primal-dual-mcp} can be converted into the form \cref{eq:mcp-box} by taking $z=(x,\lambda,\mu)$, $F = (G, H)$, $u_i = \infty$ ($\forall i$), $\ell_i = -\infty$ ($\forall i \in \{1, 2, \dots, n_x + n_\lambda\}$), and $\ell_i = 0$ ($\forall i > n_x + n_\lambda$). 
+Problem \cref{eq:primal-dual-mcp} can be converted into the form \cref{eq:mcp-box} by taking $z=(x,\lambda,\mu)$, $F = (G, H)$, $u_i = \infty$ ($\forall i$), $\ell_i = -\infty$ ($\forall i \in \{1, 2, \dots, n_x + n_\lambda\}$), and $\ell_i = 0$ ($\forall i > n_x + n_\lambda$).
 Because of the natural connection between KKT conditions (e.g., arising from trajectory optimization problems in robotics) and this \emph{primal-dual} form of the MCP, it is the only form
 \texttt{MixedComplementarityProblems.jl} exposes.
 
@@ -202,28 +202,29 @@ coupling agents through shared multipliers $\lambda_\mathrm{sh}, \mu_\mathrm{sh}
 solution is a generalized Nash equilibrium: a strategy profile from which no agent can
 unilaterally improve its own objective \cite{facchinei2003finite}.
 
-Concretely, concatenate the agents' primal variables as $x=(x_1,\dots,x_N)$ and their
-private multipliers as $\lambda_\mathrm{priv}=(\lambda_1,\dots,\lambda_N)$,
-$\mu_\mathrm{priv}=(\mu_1,\dots,\mu_N)$, and append a single pair of shared multipliers
-$\lambda_\mathrm{sh},\mu_\mathrm{sh}$ --- common to \emph{every} agent's stationarity
-condition, rather than duplicated per agent, as is standard when seeking a variational
-(normalized) equilibrium \cite{facchinei2003finite} --- so that agent $i$'s Lagrangian
-is $L_i \coloneqq f_i - \lambda_i^\top g_i - \mu_i^\top h_i - \lambda_\mathrm{sh}^\top
-g_\mathrm{sh} - \mu_\mathrm{sh}^\top h_\mathrm{sh}$. The concatenated system is again an
+Concretely, concatenate the Lagrange multipliers corresponding to equality
+constraints as $\lambda \coloneqq
+(\lambda_1, \dots, \lambda_N, \lambda_\mathrm{sh})$, and those for inequality
+constraints as $\mu \coloneqq (\mu_1, \dots, \mu_N, \mu_\mathrm{sh})$. Then,
+private multipliers as $\lambda_\mathrm{pr}=(\lambda_1,\dots,\lambda_N)$,
+$\mu_\mathrm{priv}=(\mu_1,\dots,\mu_N)$. Each agent $i$'s Lagrangian is given by
+\begin{multline}
+  \label{eq:lagrangian}
+  \mathcal{L}_i(x, \lambda, \mu; \theta) \coloneqq f_i(x; \theta) -
+  \lambda_i^\top g_i(x; \theta) - \mu_i^\top h_i(x; \theta) - \\
+  \lambda_\mathrm{sh}^\top g_\mathrm{sh}(x; \theta) - \mu_\mathrm{sh}^\top h_\mathrm{sh}(x; \theta).
+\end{multline}
+The $N$ agents' concatenated KKT conditions are then an
 instance of \cref{eq:primal-dual-mcp}, with
 \begin{equation}
   \begin{aligned}
-    G &\coloneqq \left(\nabla_{x_1} L_1, \dots, \nabla_{x_N} L_N, g_1,\dots,g_N,
+    G &\coloneqq \left(\nabla_{x_1} \mathcal{L}_1, \dots, \nabla_{x_N} \mathcal{L}_N, g_1,\dots,g_N,
     g_\mathrm{sh}\right), \\
     H &\coloneqq \left(h_1,\dots,h_N,h_\mathrm{sh}\right),
   \end{aligned}
   \label{eq:game-mcp}
 \end{equation}
-with $G$ and $H$ each a function of the full concatenated primal and dual variables
-and $\theta$. Every agent's stationarity block $\nabla_{x_i}L_i$ depends on the shared
-multipliers
-$\lambda_\mathrm{sh},\mu_\mathrm{sh}$ in addition to its own $\lambda_i,\mu_i$, which is
-exactly what couples the agents' otherwise-separate KKT systems into one game.
+with $G$ and $H$ functions of $(x, \lambda, \mu)$ and parameterized by $\theta$.
 
 \begin{runningexample}{lane-change trajectory game}
 The lane-change trajectory game of \cref{fig:teaser}(a) is a concrete instance of this
