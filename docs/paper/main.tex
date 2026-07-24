@@ -24,14 +24,12 @@
 % A recurring, visually set-off instance of the running example (the lane-change
 % trajectory game), so later sections (e.g. batched construction) can reuse the same
 % box without redefining it as a new figure/table each time.
-% \usepackage{mdframed}
+\usepackage{mdframed}
 \newcommand{\contentbox}[2]{
-  \vspace{0.3cm}
   \begin{mdframed}[backgroundcolor=black!5,linecolor=black!60,linewidth=0.5mm]
     \vspace{0.2mm}
     {\bf Running example: #1.} #2
   \end{mdframed}
-  \vspace{-0.15cm}
 }
 
 \begin{document}
@@ -255,9 +253,12 @@ To that end, we introduce a slack variable $z \in \mathbb{R}^{n_\mu}$ and rewrit
 K_\rho(x, \lambda, \mu, z; \theta) \coloneqq \begin{bmatrix}
   G(x, \lambda, \mu; \theta) \\
   H(x; \theta) - z \\
-  z \circledast \mu - \rho 1
+  z \odot \mu - \rho 1
 \end{bmatrix} = 0.
 \end{equation}
+Note that the last row of $K_\rho$ involves the elementwise product $z \odot
+\mu$ and, consequently, the number of equations in $K_\rho$ is equal to the
+total dimension of the primal, dual, and slack variables $(x, \lamdba, \mu, z)$.
 
 As summarized in \cref{alg:solver}, we proceed in rounds by solving
 \cref{eq:slacked-mcp} via a regularized Newton method and decaying $\rho \to 0$ until reaching the user's defined tolerance $\|K_0\|
