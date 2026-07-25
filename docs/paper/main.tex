@@ -354,86 +354,77 @@ precise solution.
 
 Many applications require solving not one but a whole \emph{batch} of MCPs that share
 the same symbolic structure $(G, H)$ and differ only in their parameter vector
-$\theta$---for example, many initial conditions or scenarios of the running-example
-trajectory game. Looping the unbatched solver of \cref{sec:design} over each instance in
-turn discards this shared structure and leaves available hardware parallelism, whether
-across CPU cores or on a GPU, unused. \texttt{MixedComplementarityProblems.jl} instead
-implements a batched solver, \texttt{BatchedInteriorPoint}, that solves an entire batch
-of $B$ parametrically related instances in a single call.
+$\theta$---for example, if we wished to solve the trajectory game of
+\cref{fig:teaser} from many initial conditions. Rather than na\:ively deploying
+\cref{alg:solver} on each instance in series, we reuse the shared symbolic
+structure and exploit hardware-level parallelism (both CPU multithreading and
+GPU) to solve an entire batch of $B$ parametrically-related instances in a single call.
+
+\contentbox{A batch of lane-change games}{
+  Sampling $B$ initial conditions, lane preferences, or collision radii of
+  \cref{fig:teaser}(a) yields $B$ instances of the same symbolic game, differing only
+  in $\theta$; stacking them column-wise into $\Theta \in \mathbb{R}^{n_\theta \times
+    B}$ and calling \cref{alg:batched} solves the entire batch simultaneously,
+  e.g., to evaluate a planner across a distribution of scenarios
+  \cite{li2023scenario} rather than one scenario at a time.
+}
+
 
 \subsection{A device- and strategy-agnostic solver loop}
 \label{sec:batched:loop}
 
-Stack the batch's parameter vectors column-wise into $\Theta \in \mathbb{R}^{n_\theta
-\times B}$, so that column $b$ is instance $b$'s parameter vector $\theta_b$; likewise
-stack each instance's iterate into $x, \lambda, \mu, z \in \mathbb{R}^{\cdot \times B}$.
+For convenience, we stack the batch's parameter vectors column-wise into $\Theta \in \mathbb{R}^{n_\theta
+\times B}$, so that column $b$ is instance $b$'s parameter vector $\theta_b$;
+likewise, we
+stack each instance's iterate into $X, \Lambda, M, Z \in \mathbb{R}^{(\cdot) \times B}$.
 \cref{alg:solver} is then implemented \emph{once}, against a small set of verbs---
 \texttt{residual!}, \texttt{jacobian!}, \texttt{factorize!}, \texttt{ldiv!}---that
 consume and return plain $(\cdot \times B)$ arrays. The numeric representation of the
 batched Jacobian $\nabla K_\rho$ and its factorization never leave these four verbs: they
-are hidden inside a strategy-specific cache, so the solver's control flow is agnostic to
-both \emph{where} it runs (a \texttt{device}: CPU, or an NVIDIA GPU via
-\href{https://github.com/JuliaGPU/KernelAbstractions.jl}{\texttt{KernelAbstractions.jl}})
-and \emph{how} $\nabla K_\rho$ is represented and factored (a \texttt{strategy}). In this
-paper, we use the \texttt{BatchedSparse} strategy: the $B$ instances share one sparsity
+are encapsulated inside a strategy-specific cache, so the solver's control flow is agnostic to
+both \emph{where} it runs
+and \emph{how} $\nabla K_\rho$ is represented and factored. We implement a
+``batched sparse'' strategy: the $B$ instances share one sparsity
 pattern for $\nabla K_\rho$, computed once from the symbolic $(G, H)$, and each instance
-fills only its own column of the corresponding $(\mathrm{nnz} \times B)$ value array.
+fills only its own column of the corresponding $(\mathrm{nnz} \times B)$ value
+array containing only the structurally nonzero elements of $\nabla K_\rho$.
 
 \subsection{Adapting \cref{alg:solver} to a batch}
 
 Three changes distinguish the batched loop from \cref{alg:solver}. First, the homotopy
 and regularization parameters $\rho, \epsilon$, and the convergence check
-$\|K_\rho\|$, all become length-$B$ vectors, one per instance, so that hard instances
-can iterate longer without penalizing easy ones sharing the same call; care must be
-taken that the norm $\|K_\rho\|$ be computed only over each instance's coordinates,
-never collapsing the batch axis.
+$\|K_\rho\|$, all become length-$B$ vectors, one per instance, so that harder
+problem instances
+can iterate longer without penalizing easier instances in the same batch.
 
-Second, the fraction-to-boundary linesearch \cref{eq:linesearch} has a
-closed-form solution (\cref{sec:design}); the batched stepsizes $\alpha_k, \beta_k \in
-\mathbb{R}^B$ are therefore computed elementwise, with no backtracking loop and, in
-particular, no per-instance synchronization between host and device---a serial
-linesearch is what would otherwise dominate the batched solver's wall-clock time on a
-GPU.
+Second, because linesearch \cref{eq:linesearch} has a
+closed-form solution, the batched stepsizes $\alpha_k, \beta_k \in
+\mathbb{R}^B$ are therefore computed elementwise. There is no backtracking loop and, in
+particular, no per-instance synchronization between host and device.
 
-Third, a batch typically mixes easy, hard, and infeasible instances. An instance that
-neither converges nor diverges is frozen---excluded from further Newton
-updates---after \texttt{max\_stall\_rounds} (default $5$) consecutive outer iterations of
-\cref{alg:solver} without its inner loop reaching $\|K_\rho\| \le \rho$, and is reported
-as \texttt{:failed}; without this, a handful of stalled instances would force the entire
-batch to iterate to the ceiling.
+Third, a batch can often include easy, hard, and infeasible instances.
+Therefore, after an instance exceeds a maximum number (e.g., $5$) of consecutive
+outer iterations  without satisfying $\|K_\rho\| \le \rho$, it is flagged as a
+failure. Depending upon the hardware backend (CPU or GPU), these failures are
+either skipped entirely (CPU) or retained, but kept frozen. This automatic
+detection of failures prevents a handful of stalled instances from slowing down
+a batch composed of many easier instances.
+
+\todo{add an algorithm block, labeled alg:batched}
 
 \subsection{Backends}
 
 On CPU, the shared sparsity pattern is assembled once and each instance's numeric
-factorization is refactored via KLU, reusing the pivot ordering computed on the first
-outer round; the $B$ instances are distributed across threads with
-\texttt{Threads.@threads}. On GPU, \texttt{solve} is called identically; a package
-extension that activates only when both \texttt{CUDA.jl} and \texttt{CUDSS.jl} are
-loaded provides a batched \texttt{factorize!}/\texttt{ldiv!} pair backed by cuDSS's
-batched sparse solve, so the base package carries no GPU dependency and runs unchanged
-on non-NVIDIA machines. \todo{cite/insert CPU-thread-count and GPU-vs-CPU throughput
-numbers here, or point forward to \cref{sec:experiments}}
-
-\contentbox{Batching the lane-change game}{
-  Sampling $B$ initial conditions, lane preferences, or collision radii of
-  \cref{fig:teaser}(a) yields $B$ instances of the same symbolic game, differing only
-  in $\theta$; stacking them column-wise into $\Theta \in \mathbb{R}^{n_\theta \times
-  B}$ and calling \texttt{BatchedInteriorPoint} solves the entire batch simultaneously,
-  e.g., to evaluate a planner across a distribution of scenarios
-  \cite{li2023scenario} rather than one scenario at a time.
-}
+factorization of $\nabla K_\rho$ reuses the pivot ordering computed on the first
+outer round. Then, the $B$ instances are distributed across threads.
+\david{describe how the CPU/GPU handle frozen instances differently}
 
 \begin{remark}
-The verb set of \cref{sec:batched:loop} was deliberately kept narrow so that two further
-strategies could later implement it without changing the solver's control flow, though
-neither is implemented yet. A \texttt{BatchedDense} strategy would represent
-$\nabla K_\rho$ densely, as $(\cdot \times \cdot \times B)$, and solve it with a batched
-LU; this trades the bookkeeping of a shared sparsity pattern for simplicity, but is only
-viable when each instance's dimension is small. A \texttt{SparseSingle} strategy, at the
-opposite extreme, would take $B = 1$ and factor one large sparse $\nabla K_\rho$
-directly; because it implements the same four verbs, it would let a single large MCP
-reuse \cref{alg:solver} unchanged---keeping the door open to problems too large to
-batch, without a second solver implementation.
+The verb set of \cref{sec:batched:loop} is deliberately narrow in order to
+readily accommodate other strategies tailored to different problem structures.
+For example, a ``batched dense'' strategy could represent
+$\nabla K_\rho$ densely, as a $(\cdot) \times (\cdot) \times B$ tensor, and solve it with a batched
+LU factorization.
 \end{remark}
 
 \section{Experiments}
