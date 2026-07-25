@@ -355,7 +355,7 @@ precise solution.
 Many applications require solving not one but a whole \emph{batch} of MCPs that share
 the same symbolic structure $(G, H)$ and differ only in their parameter vector
 $\theta$---for example, if we wished to solve the trajectory game of
-\cref{fig:teaser} from many initial conditions. Rather than na\:ively deploying
+\cref{fig:teaser} from many initial conditions. Rather than naively deploying
 \cref{alg:solver} on each instance in series, we reuse the shared symbolic
 structure and exploit hardware-level parallelism (both CPU multithreading and
 GPU) to solve an entire batch of $B$ parametrically-related instances in a single call.
@@ -410,14 +410,68 @@ either skipped entirely (CPU) or retained, but kept frozen. This automatic
 detection of failures prevents a handful of stalled instances from slowing down
 a batch composed of many easier instances.
 
-\todo{add an algorithm block, labeled alg:batched}
+\begin{algorithm}[t]
+\DontPrintSemicolon
+\KwIn{batch of $B$ instances $(x_b,\lambda_b,\mu_b,z_b;\theta_b)$ as in
+  \cref{alg:solver}, each with its own $\rho_b,\epsilon_b$; tightening/loosening
+  rates $\underline\gamma,\bar\gamma$; max.\ inner/outer iterations
+  $k_\mathrm{max}, T_\mathrm{max}$; max.\ consecutive stalled outer rounds
+  $T_\mathrm{stall}$; tolerance $\bar K$}
+\KwOut{status$_b \in \{\texttt{solved}, \texttt{failed}\}$ and
+  $(x_b,\lambda_b,\mu_b,z_b)$ for $b = 1,\dots,B$}
+status$_b \gets \texttt{active}$, $\mathrm{stall}_b \gets 0$ \quad $\forall b$\;
+$t \gets 0$\;
+\While{$t < T_\mathrm{max}$ and status$_b = \texttt{active}$ for some $b$}{
+  $k \gets 0$\;
+  \Repeat{$\|K_{\rho_b}\| \le \rho_b$ for every active $b$, or $k \ge k_\mathrm{max}$}{
+    assemble and factor $\nabla K_{\rho_b}$ and solve for $\delta_b$, for every $b$
+      with status$_b = \texttt{active}$\label{line:batched-solve}\;
+    step active instances via fraction-to-boundary \cref{eq:linesearch}; instances
+      with status$_b \ne \texttt{active}$ take a zero step\;
+    $k \gets k + 1$\;
+  }
+  \ForEach{$b$ with status$_b = \texttt{active}$}{
+    \eIf{$\|K_{\rho_b}\| \le \rho_b$}{
+      tighten $\rho_b,\epsilon_b$ (as in \cref{alg:solver}); $\mathrm{stall}_b \gets 0$\;
+      \lIf{$\rho_b \le \bar K$}{status$_b \gets \texttt{solved}$}
+    }{
+      loosen $\rho_b,\epsilon_b$; $\mathrm{stall}_b \gets \mathrm{stall}_b + 1$\;
+    }
+    \lIf{$\mathrm{stall}_b \ge T_\mathrm{stall}$}{status$_b \gets \texttt{failed}$}
+  }
+  $t \gets t + 1$\;
+}
+\Return{$\{\mathrm{status}_b, (x_b,\lambda_b,\mu_b,z_b)\}_{b=1}^B$}
+\caption{Batched primal-dual interior-point method}
+\label{alg:batched}
+\end{algorithm}
+
+A stalled instance is not simply left to run: line~\ref{line:batched-solve} restricts
+the (re)assembly, factorization, and solve to instances with status$_b = \texttt{active}$
+precisely so that a handful of stalled or failed instances stop consuming Newton
+iterations once flagged, rather than dragging the whole batch to $T_\mathrm{max}$.
 
 \subsection{Backends}
 
 On CPU, the shared sparsity pattern is assembled once and each instance's numeric
 factorization of $\nabla K_\rho$ reuses the pivot ordering computed on the first
-outer round. Then, the $B$ instances are distributed across threads.
-\david{describe how the CPU/GPU handle frozen instances differently}
+outer round; the $B$ instances are distributed across threads. Because each
+instance's factorization is an independent per-instance sparse LU (KLU), skipping an
+inactive instance at line~\ref{line:batched-solve} is a literal per-instance branch: an
+instance with status$_b \ne \texttt{active}$ costs nothing beyond a boolean check, so
+CPU throughput scales with the number of instances still active, not $B$.
+
+The GPU backend cannot make the same trade. It factors and solves the batch's shared
+sparsity pattern with cuDSS's \emph{batched} sparse solver, which processes all $B$
+instances as a single device-side call; there is no per-instance skip inside a batched
+factorization. Consequently, line~\ref{line:batched-solve}'s active-instance
+restriction is accepted on GPU only for a uniform verb signature across backends, but
+is a no-op there: every outer round factors and solves \emph{all} $B$ instances,
+converged and failed ones included, and only their zero stepsize keeps the frozen
+instances' $(x_b,\lambda_b,\mu_b,z_b)$ unchanged. This is a genuine cost of batching on
+GPU---one paid in exchange for offloading the whole batch to a single, highly
+parallel factorization---and it is the reason $T_\mathrm{stall}$ matters more on GPU
+than on CPU: an instance that never fails is never free.
 
 \begin{remark}
 The verb set of \cref{sec:batched:loop} is deliberately narrow in order to
