@@ -352,6 +352,13 @@ precise solution.
 \section{Batched and GPU-Parallel Solving}
 \label{sec:batched}
 
+\todo{notation cleanup before shipping: (i) subscripts on primal/dual variables mean
+``player $i$'' in \cref{sec:background:games} but ``batch instance $b$'' here---pick
+distinct symbols, or add an explicit disambiguating remark; (ii) batched primal/dual
+iterates are capitalized ($X,\Lambda,M,Z,\Theta$) but the batched stepsizes
+$\alpha_k,\beta_k \in \mathbb{R}^B$ are not---make the capitalization convention
+consistent across both}
+
 Many applications require solving not one but a whole \emph{batch} of MCPs that share
 the same symbolic structure $(G, H)$ and differ only in their parameter vector
 $\theta$---for example, if we wished to solve the trajectory game of
