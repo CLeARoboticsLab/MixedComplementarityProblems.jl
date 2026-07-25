@@ -315,27 +315,26 @@ precise solution.
 \begin{algorithm}[t]
 \DontPrintSemicolon
 \KwIn{initial iterate $(x,\lambda,\mu,z)$ with $\mu,z>0$; parameters $\theta$;
-  initial $\rho,\epsilon$; tightening/loosening rates
-  $\gamma_\mathrm{tighten},\gamma_\mathrm{loosen}\in(0,1)$; max.\ inner
+  initial $\rho,\epsilon > 0$; tightening/loosening rates
+  $\underline\gamma,\bar\gamma\in(0,1)$; max.\ inner
   iterations $k_\mathrm{max}$; tolerance $\bar K$}
 \KwOut{$(x,\lambda,\mu,z)$ with $\|K_0(x,\lambda,\mu,z;\theta)\|\le\bar K$}
 \While{$\|K_0(x,\lambda,\mu,z;\theta)\| > \bar K$}{
   $k \gets 0$\;
   \Repeat{$\|K_\rho(x,\lambda,\mu,z;\theta)\|\le\rho$ or $k\ge k_\mathrm{max}$}{
-    assemble $K_\rho$ \cref{eq:slacked-mcp} and its regularized Jacobian \cref{eq:newton}\;
-    solve \cref{eq:newton} for the Newton direction $\delta=(\delta_x,\delta_\lambda,\delta_\mu,\delta_z)$\;
+    assemble $K_\rho$ \cref{eq:slacked-mcp} and solve \cref{eq:newton} for the Newton direction $\delta=(\delta_x,\delta_\lambda,\delta_\mu,\delta_z)$\;
     compute step sizes $\alpha_k,\beta_k$ via the fraction-to-boundary rule \cref{eq:linesearch}\label{line:linesearch}\;
     $x \gets x+\alpha_k\delta_x$,\quad $\lambda\gets\lambda+\alpha_k\delta_\lambda$,\quad
     $z\gets z+\alpha_k\delta_z$,\quad $\mu\gets\mu+\beta_k\delta_\mu$\;
     $k \gets k+1$\;
   }
   \eIf{$\|K_\rho(x,\lambda,\mu,z;\theta)\|\le\rho$}{
-    $\rho \gets \rho\,(1-e^{-\gamma_\mathrm{tighten}k})$,\quad
-    $\epsilon \gets \epsilon\,(1-e^{-\gamma_\mathrm{tighten}k})$
+    $\rho \gets \rho\,(1-e^{-\underline\gamma k})$,\quad
+    $\epsilon \gets \epsilon\,(1-e^{-\underline\gamma k})$
     \tcp*{tighten}\label{line:tighten}
   }{
-    $\rho \gets \rho\,(1+e^{-\gamma_\mathrm{loosen}k})$,\quad
-    $\epsilon \gets \epsilon\,(1+e^{-\gamma_\mathrm{loosen}k})$
+    $\rho \gets \rho\,(1+e^{-\bar\gamma k})$,\quad
+    $\epsilon \gets \epsilon\,(1+e^{-\bar\gamma k})$
     \tcp*{loosen}\label{line:loosen}
   }
   $\rho \gets \min(\rho, 1)$\;
