@@ -377,9 +377,8 @@ For convenience, we stack the batch's parameter vectors column-wise into $\Theta
 \times B}$, so that column $b$ is instance $b$'s parameter vector $\theta_b$;
 likewise, we
 stack each instance's iterate into $X, \Lambda, M, Z \in \mathbb{R}^{(\cdot) \times B}$.
-\cref{alg:solver} is then implemented \emph{once}, against a small set of verbs---
-\texttt{residual!}, \texttt{jacobian!}, \texttt{factorize!}, \texttt{ldiv!}---that
-consume and return plain $(\cdot \times B)$ arrays. The numeric representation of the
+\cref{alg:solver} is then implemented \emph{once}, against a small set of verbs---\texttt{residual!}, \texttt{jacobian!}, \texttt{factorize!}, \texttt{ldiv!}---that
+consume and return plain $(\cdot) \times B$ arrays. The numeric representation of the
 batched Jacobian $\nabla K_\rho$ and its factorization never leave these four verbs: they
 are encapsulated inside a strategy-specific cache, so the solver's control flow is agnostic to
 both \emph{where} it runs
@@ -391,7 +390,7 @@ array containing only the structurally nonzero elements of $\nabla K_\rho$.
 
 \subsection{Adapting \cref{alg:solver} to a batch}
 
-Three changes distinguish the batched loop from \cref{alg:solver}. First, the homotopy
+Three changes distinguish the batched loop in \cref{alg:batched} from \cref{alg:solver}. First, the homotopy
 and regularization parameters $\rho, \epsilon$, and the convergence check
 $\|K_\rho\|$, all become length-$B$ vectors, one per instance, so that harder
 problem instances
@@ -406,7 +405,7 @@ Third, a batch can often include easy, hard, and infeasible instances.
 Therefore, after an instance exceeds a maximum number (e.g., $5$) of consecutive
 outer iterations  without satisfying $\|K_\rho\| \le \rho$, it is flagged as a
 failure. Depending upon the hardware backend (CPU or GPU), these failures are
-either skipped entirely (CPU) or retained, but kept frozen. This automatic
+either skipped or retained, but kept frozen. This automatic
 detection of failures prevents a handful of stalled instances from slowing down
 a batch composed of many easier instances.
 
@@ -432,8 +431,12 @@ $t \gets 0$\;
   }
   \ForEach{$b$ with status$_b = \texttt{active}$}{
     \eIf{$\|K_{\rho_b}\| \le \rho_b$}{
-      tighten $\rho_b,\epsilon_b$ (as in \cref{alg:solver}); $\mathrm{stall}_b \gets 0$\;
-      \lIf{$\rho_b \le \bar K$}{status$_b \gets \texttt{solved}$}
+      \eIf{$\rho_b \le \bar K$}{
+        status$_b \gets \texttt{solved}$
+      }{
+      tighten $\rho_b,\epsilon_b$ (as in \cref{alg:solver}); $\mathrm{stall}_b
+      \gets 0$
+      }
     }{
       loosen $\rho_b,\epsilon_b$; $\mathrm{stall}_b \gets \mathrm{stall}_b + 1$\;
     }
@@ -442,7 +445,7 @@ $t \gets 0$\;
   $t \gets t + 1$\;
 }
 \Return{$\{\mathrm{status}_b, (x_b,\lambda_b,\mu_b,z_b)\}_{b=1}^B$}
-\caption{Batched primal-dual interior-point method}
+\caption{Batched primal-dual interior-point}
 \label{alg:batched}
 \end{algorithm}
 
@@ -456,14 +459,14 @@ iterations once flagged, rather than dragging the whole batch to $T_\mathrm{max}
 On CPU, the shared sparsity pattern is assembled once and each instance's numeric
 factorization of $\nabla K_\rho$ reuses the pivot ordering computed on the first
 outer round; the $B$ instances are distributed across threads. Because each
-instance's factorization is an independent per-instance sparse LU (KLU), skipping an
+instance's factorization is an independent per-instance sparse LU (KLU) \todo{ref}, skipping an
 inactive instance at line~\ref{line:batched-solve} is a literal per-instance branch: an
 instance with status$_b \ne \texttt{active}$ costs nothing beyond a boolean check, so
 CPU throughput scales with the number of instances still active, not $B$.
 
 The GPU backend cannot make the same trade. It factors and solves the batch's shared
-sparsity pattern with cuDSS's \emph{batched} sparse solver, which processes all $B$
-instances as a single device-side call; there is no per-instance skip inside a batched
+sparsity pattern with \texttt{cuDSS}'s \emph{batched} sparse solver, which processes all $B$
+instances as a single device-side call and there is no per-instance skip inside a batched
 factorization. Consequently, line~\ref{line:batched-solve}'s active-instance
 restriction is accepted on GPU only for a uniform verb signature across backends, but
 is a no-op there: every outer round factors and solves \emph{all} $B$ instances,
