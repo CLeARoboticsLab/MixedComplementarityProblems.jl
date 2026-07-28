@@ -456,10 +456,10 @@ $t \gets 0$\;
 \label{alg:batched}
 \end{algorithm}
 
-A stalled instance is not simply left to run: line~\ref{line:batched-solve} restricts
-the (re)assembly, factorization, and solve to instances with status$_b = \texttt{active}$
-precisely so that a handful of stalled or failed instances stop consuming Newton
-iterations once flagged, rather than dragging the whole batch to $T_\mathrm{max}$.
+Stalled instances are not left to run: line~\ref{line:batched-solve} restricts
+the (re)assembly, factorization, and solve to active instances. This prevents a handful of stalled or failed instances from consuming Newton
+iterations once flagged; otherwise, they would force the entire batch to
+consume the maximum iteration count.
 
 \subsection{Backends}
 
@@ -475,13 +475,13 @@ The GPU backend cannot make the same trade. It factors and solves the batch's sh
 sparsity pattern with \texttt{cuDSS}'s \emph{batched} sparse solver, which processes all $B$
 instances as a single device-side call and there is no per-instance skip inside a batched
 factorization. Consequently, line~\ref{line:batched-solve}'s active-instance
-restriction is accepted on GPU only for a uniform verb signature across backends, but
+restriction is accepted on GPU only to maintain a uniform verb signature across backends, but
 is a no-op there: every outer round factors and solves \emph{all} $B$ instances,
 converged and failed ones included, and only their zero stepsize keeps the frozen
-instances' $(x_b,\lambda_b,\mu_b,z_b)$ unchanged. This is a genuine cost of batching on
+instances' $(x_b,\lambda_b,\mu_b,z_b)$ unchanged. This imposes a real cost on
 GPU---one paid in exchange for offloading the whole batch to a single, highly
 parallel factorization---and it is the reason $T_\mathrm{stall}$ matters more on GPU
-than on CPU: an instance that never fails is never free.
+than on CPU.
 
 \begin{remark}
 The verb set of \cref{sec:batched:loop} is deliberately narrow in order to
