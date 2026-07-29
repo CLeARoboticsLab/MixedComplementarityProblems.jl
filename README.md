@@ -214,12 +214,12 @@ The returned `x`, `y`, `s` live on the GPU (as `CuArray`s); bring them back with
 > pattern the benchmarks use. `Adapt` is not a dependency of this package, so you would need
 > to add it to your own project (`] add Adapt`).
 
-> **Performance status (as of `v0.2.2`).** The GPU backend is functional but does **not**
-> yet consistently beat a many-threaded CPU run — on some problems it is at parity, and on
-> others (e.g. the trajectory game) it is currently slower, while both handily beat PATH.
-> This is under active investigation. See the [benchmarking
+> **Performance status (as of `v0.2.3`).** GPU now beats a many-threaded CPU run by a
+> consistent 2.5-2.8x on large-enough batched problems (e.g. the trajectory game once
+> `horizon ≳ 30`), though CPU remains faster or roughly at parity for smaller
+> per-instance problems — both handily beat PATH regardless. See the [benchmarking
 > README](https://github.com/CLeARoboticsLab/MixedComplementarityProblems.jl/blob/main/benchmark/README.md)
-> and PR #54 for up-to-date numbers and discussion.
+> and PRs #54/#55 for the full breakdown and up-to-date numbers.
 
 ## A fancier demo
 
