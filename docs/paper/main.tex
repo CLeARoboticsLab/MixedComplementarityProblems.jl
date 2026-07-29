@@ -575,7 +575,7 @@ closes (or reverses) the gap to \texttt{PATH}; update this paragraph and
   \centering
   \begin{tabular}{llcc}
     \toprule
-    Problem & Solver & Solved frac. & Time / solve \\
+    Problem & Solver & Solved & Time / solve \\
     \midrule
     \multirow{3}{*}{Random QP}
       & \texttt{PATH}                    & $\cdot$ & $\cdot$ \\
@@ -639,13 +639,11 @@ parallelization---from the first.
 \subsection{CPU thread scaling}
 \label{sec:exp:threads}
 
-\todo{pick up reading here}
 \cref{fig:threadscaling} shows batched throughput (instances cleared per second) as a
 function of the number of CPU threads, for a fixed batch size. Because each instance's
-sparse factorization is independent (\cref{sec:batched}), throughput scales
+sparse factorization is independent (cf. \cref{sec:batched}), throughput scales
 \todo{near-linearly? sublinearly?} up to the number of physical cores and then
-\todo{plateaus/regresses} under oversubscription, consistent with the guidance in the
-package README. \todo{report the peak throughput and the thread count at which it is
+\todo{plateaus/regresses} when the physical cores are saturated. \todo{report the peak throughput and the thread count at which it is
 reached, for both problem families}
 
 \begin{figure}[t]
@@ -663,32 +661,35 @@ reached, for both problem families}
 \subsection{GPU vs.\ CPU: a regime-dependent crossover}
 \label{sec:exp:gpu}
 
-Whether the GPU backend beats a many-threaded CPU is \emph{not} a single yes/no answer;
-it depends on the regime, and we characterize the crossover directly. We sweep two axes
-independently: batch size $B$ at fixed per-instance size (\cref{fig:gpu}, left), and
-per-instance size at fixed $B$ (\cref{fig:gpu}, right; QP via $n_x$, trajectory game via
-horizon $T$).
+Depending on the setting, GPU can outperform \emph{or} underperform
+multithreaded CPU operation. To characterize the tradeoffs directly, we report
+independent sweeps of the batch size $B$ at fixed per-instance size (cf. \cref{fig:gpu}, left), and
+per-instance size---determined by the number of primal variables $n_x$ in the QP
+setting, and by the planning horizon $T$ in the trajectory game---at fixed $B$ (cf. \cref{fig:gpu}, right).
 
-The consistent finding is that the GPU wins once the per-instance problem is large
-enough, and is at parity or slower below that. On the trajectory game, the GPU overtakes
+The consistent pattern in \cref{fig:gpu} is that the GPU backend wins once
+problem instances grow large
+enough, and is at parity or slower below that threshold. On the trajectory game, the GPU overtakes
 \todo{final thread count}-thread CPU by \todo{2.5--2.8}$\times$ once the horizon (and thus
 the KKT dimension) is large enough \todo{state the crossover: $T \gtrsim 30$, $d \gtrsim
 2000$}; below that, and for the small dense QPs at small batch sizes, the CPU is faster or
-at parity \todo{quantify both regimes}. The mechanism is the batched sparse
+at parity \todo{quantify both regimes}.
+
+The mechanism which explains this pattern is the batched sparse
 factorization itself: \texttt{cuDSS} processes the whole batch as a single device-side
-call whose fixed launch and occupancy overhead is amortized better as each instance's
-matrix grows, whereas the CPU's per-thread \texttt{KLU} factorization has no comparable
+call whose fixed launch and occupancy overhead amortizes as the size of each
+instance's KKT Jacobian grows, whereas the CPU's per-thread \texttt{KLU} factorization has no comparable
 fixed cost to amortize. \todo{confirm this mechanism claim against the isolated
 per-call factorize timing from the benchmark suite, per the ``investigate, don't assume''
 rule---the crossover should be visible in raw \texttt{jacobian!+factorize!} timing, not
 just end-to-end.}
 
-Two caveats bound this result and are reported plainly. First, the trajectory game's
-solved fraction declines at long horizons \todo{state the numbers, e.g.\ $\sim$X\% at
+Two caveats bound this result and are reported plainly. First, the fraction of
+trajectory games solved in each batch declines at longer time horizons \todo{state the numbers, e.g.\ $\sim$X\% at
 $T=50$}, so the large-$T$ GPU-vs-CPU ratios compare backends on a harder instance
 distribution, not just a larger one. Second, the QP problem-size sweep is confounded by
-the random generator's solved fraction changing sharply with $n_x$, so we treat it as
-indicative rather than a clean, isolated measurement of per-instance-size scaling.
+the fraction of solved random instances changing sharply with the primal
+dimension $n_x$.
 \todo{after the fresh run, restate these caveats with final numbers, and note the
 large-batch (\texttt{cuDSS}) OOM behavior if it still reproduces.}
 
