@@ -4,6 +4,7 @@
 \usepackage{mathtools}
 \usepackage{graphicx}
 \usepackage{booktabs}
+\usepackage{multirow}
 \usepackage{cite}
 \usepackage{url}
 \usepackage[vlined,linesnumbered]{algorithm2e}
@@ -493,7 +494,217 @@ LU factorization.
 
 \section{Experiments}
 \label{sec:experiments}
-\todo{TODO}
+
+We evaluate \texttt{MixedComplementarityProblems.jl} against \texttt{PATH} along the two
+axes that matter for the robotics applications of \cref{sec:intro}: \emph{reliability}
+(does the solver converge as often as \texttt{PATH}?) and \emph{throughput} (how quickly
+can it clear a batch of parametrically-related instances?). Concretely, our experiments
+answer four questions:
+\begin{enumerate}
+  \item \textbf{Single-instance parity.} Solving one problem at a time, does our
+  interior-point method match \texttt{PATH}'s reliability, and how does its per-solve
+  wall-clock compare? (\cref{sec:exp:single})
+  \item \textbf{Batched throughput.} When a whole batch must be cleared, how much faster
+  is a single batched solve than sequential \texttt{PATH} calls? (\cref{sec:exp:throughput})
+  \item \textbf{CPU thread scaling.} How does batched throughput scale with the number of
+  CPU threads? (\cref{sec:exp:threads})
+  \item \textbf{GPU vs.\ CPU.} When does offloading the batch to a GPU beat a
+  many-threaded CPU, and why? (\cref{sec:exp:gpu})
+\end{enumerate}
+
+\subsection{Experimental setup}
+\label{sec:exp:setup}
+
+\paragraph{Problem families}
+We benchmark on two families of parametric MCPs. The first is a family of randomly
+generated, sparse convex \emph{quadratic programs} (QPs) of the form $\min_x \tfrac12
+x^\top M x - \phi^\top x$ s.t.\ $Ax - b \ge 0$, with $M \succeq 0$; the parameter vector
+$\theta = (M, A, b, \phi)$ is drawn at random with a controllable sparsity rate, and the
+problem dimensions (numbers of primal variables $n_x$ and inequality constraints
+$n_\mu$) are free knobs. This family exercises the solver on a controlled range of KKT
+system sizes and, because the random draws are not guaranteed feasible, on a realistic
+mix of solvable and infeasible instances. The second family is the lane-change
+\emph{trajectory game} of \cref{sec:background:games} (the running example), a two-player
+generalized Nash equilibrium problem over a planning horizon $T$; each sampled instance
+randomizes the players' initial states and lane preferences, so the batch spans a
+distribution of scenarios exactly as a scenario-based planner would encounter
+\cite{li2023scenario}. The horizon $T$ controls the per-instance KKT dimension.
+
+\paragraph{Baselines}
+Our primary baseline is \texttt{PATH}~\cite{dirkse1995path}, accessed through
+\texttt{PATHSolver.jl} and \texttt{ParametricMCPs.jl}; \texttt{PATH} solves one instance
+at a time on a single thread. We additionally report our own \emph{unbatched}
+\texttt{InteriorPoint} solver (\cref{alg:solver}) as an intermediate baseline: it isolates
+the cost of our interior-point formulation from the batching machinery, letting us
+separate ``is the method competitive?'' from ``does batching help?''. Against these we
+compare the \texttt{BatchedInteriorPoint} solver (\cref{alg:batched}) in both its CPU
+(multithreaded) and GPU (cuDSS) configurations.
+
+\paragraph{Hardware and software}
+All CPU experiments run on \todo{final CPU: model, physical core count} with
+\todo{RAM} of RAM; GPU experiments run on \todo{final GPU: model, VRAM}. We use Julia
+\todo{version} and report the median of \todo{$n$} repetitions after a separate warm-up
+solve to exclude compilation time. \todo{state PATH version / license} Unless noted, we
+use a convergence tolerance of $\bar K = 10^{-4}$; a batch is reported by its
+\emph{solved fraction} (instances reaching $\|K_0\| \le \bar K$) and its total
+wall-clock to clear all $B$ instances.
+
+\subsection{Single-instance reliability and speed}
+\label{sec:exp:single}
+
+Before batching, we confirm that our interior-point method is a faithful stand-in for
+\texttt{PATH} on individual problems. \cref{tab:single} reports, for each problem family,
+the fraction of instances each solver converges on and its mean per-solve wall-clock.
+Two points matter. First, our solver's solved fraction tracks \texttt{PATH}'s closely
+\todo{quantify: within X\% on both families}, confirming the reliability claim of
+\cref{sec:intro}: the instances \texttt{PATH} solves, we solve too, and the infeasible
+ones neither solver claims. Second, on a \emph{single} instance our unbatched
+\texttt{InteriorPoint} is somewhat slower than \texttt{PATH} \todo{quantify the per-solve
+gap---expected to be a small constant factor, not an order of magnitude}, which is
+unsurprising: \texttt{PATH} is a mature, heavily optimized code, and a single solve gives
+our solver no opportunity to amortize the batching machinery that is its entire point.
+The batched results below show that this modest per-instance handicap is more than repaid
+the moment more than a handful of instances must be solved.
+
+\todo{KLU experiment: the unbatched solver currently factors $\nabla K_\rho$ with
+\texttt{UMFPACK} (LinearSolve.jl's default). The batched CPU path instead uses \texttt{KLU}
+with in-place refactorization, which reuses the pivot ordering across Newton steps and is
+substantially faster on these small, repeatedly-refactored systems. Re-run the
+single-instance baseline with \texttt{KLU} in the unbatched solver and report whether it
+closes (or reverses) the gap to \texttt{PATH}; update this paragraph and
+\cref{tab:single} accordingly.}
+
+\begin{table}[t]
+  \centering
+  \caption{Single-instance reliability and speed. Solved fraction and mean per-solve
+  wall-clock over \todo{$n$} random instances of each family (QP: $n_x=\todo{},
+  n_\mu=\todo{}$; trajectory game: $T=\todo{}$).
+  \todo{populate all cells from the fresh single-instance run; do not ship placeholders}}
+  \label{tab:single}
+  \begin{tabular}{llcc}
+    \toprule
+    Problem & Solver & Solved frac. & Time / solve \\
+    \midrule
+    \multirow{3}{*}{Random QP}
+      & \texttt{PATH}                    & $\cdot$ & $\cdot$ \\
+      & \texttt{InteriorPoint} (UMFPACK) & $\cdot$ & $\cdot$ \\
+      & \texttt{InteriorPoint} (KLU)     & $\cdot$ & $\cdot$ \\
+    \midrule
+    \multirow{3}{*}{Trajectory game}
+      & \texttt{PATH}                    & $\cdot$ & $\cdot$ \\
+      & \texttt{InteriorPoint} (UMFPACK) & $\cdot$ & $\cdot$ \\
+      & \texttt{InteriorPoint} (KLU)     & $\cdot$ & $\cdot$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Batched throughput vs.\ \texttt{PATH}}
+\label{sec:exp:throughput}
+
+The batched solver's purpose is to clear an entire batch at once. \cref{tab:throughput}
+reports the total wall-clock to solve a batch of $B = \todo{}$ instances of each family
+three ways: sequential \texttt{PATH} calls, sequential unbatched \texttt{InteriorPoint}
+calls, and a single \texttt{BatchedInteriorPoint} call across
+\todo{final thread count} CPU threads. This is the headline result and the subject of
+\cref{fig:teaser}(b): on the trajectory game, the CPU-multithreaded batched solver clears
+the batch \todo{60--80}$\times$ faster than sequential \texttt{PATH}
+\todo{finalize; confirm the QP speedup as well}. The speedup has two compounding sources:
+sharing the symbolic $(G, H)$ structure across the batch (assembled and sparsity-analyzed
+once), and parallelizing the per-instance factorize/solve across threads. Note that the
+comparison against sequential \texttt{InteriorPoint} isolates the second effect---the pure
+parallelization win---from the first.
+
+\begin{table}[t]
+  \centering
+  \caption{Batched throughput. Total wall-clock and solved fraction to clear a batch of
+  $B=\todo{}$ instances, and speedup of the batched CPU solver over each sequential
+  baseline. \todo{populate from the fresh throughput run}}
+  \label{tab:throughput}
+  \begin{tabular}{llccc}
+    \toprule
+    Problem & Solver & Total time & Solved & Speedup \\
+    \midrule
+    \multirow{3}{*}{Random QP}
+      & \texttt{PATH} (seq.)              & $\cdot$ & $\cdot$ & $1\times$ \\
+      & \texttt{InteriorPoint} (seq.)     & $\cdot$ & $\cdot$ & $\cdot$ \\
+      & \texttt{BatchedInteriorPoint}     & $\cdot$ & $\cdot$ & $\cdot$ \\
+    \midrule
+    \multirow{3}{*}{Trajectory game}
+      & \texttt{PATH} (seq.)              & $\cdot$ & $\cdot$ & $1\times$ \\
+      & \texttt{InteriorPoint} (seq.)     & $\cdot$ & $\cdot$ & $\cdot$ \\
+      & \texttt{BatchedInteriorPoint}     & $\cdot$ & $\cdot$ & $\cdot$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{CPU thread scaling}
+\label{sec:exp:threads}
+
+\cref{fig:threadscaling} shows batched throughput (instances cleared per second) as a
+function of the number of CPU threads, for a fixed batch size. Because each instance's
+sparse factorization is independent (\cref{sec:batched}), throughput scales
+\todo{near-linearly? sublinearly?} up to the number of physical cores and then
+\todo{plateaus/regresses} under oversubscription, consistent with the guidance in the
+package README. \todo{report the peak throughput and the thread count at which it is
+reached, for both problem families}
+
+\begin{figure}[t]
+  \centering
+  \fbox{\begin{minipage}[c][0.20\textheight][c]{0.9\columnwidth}
+    \centering
+    \todo{thread-scaling plot: throughput (instances/s) vs.\ thread count, one curve per
+    problem family, with a vertical marker at the physical core count}
+  \end{minipage}}
+  \caption{Batched-solver throughput vs.\ CPU thread count at fixed batch size. Throughput
+  scales with the number of active instances until the physical cores are saturated.}
+  \label{fig:threadscaling}
+\end{figure}
+
+\subsection{GPU vs.\ CPU: a regime-dependent crossover}
+\label{sec:exp:gpu}
+
+Whether the GPU backend beats a many-threaded CPU is \emph{not} a single yes/no answer;
+it depends on the regime, and we characterize the crossover directly. We sweep two axes
+independently: batch size $B$ at fixed per-instance size (\cref{fig:gpu}, left), and
+per-instance size at fixed $B$ (\cref{fig:gpu}, right; QP via $n_x$, trajectory game via
+horizon $T$).
+
+The consistent finding is that the GPU wins once the per-instance problem is large
+enough, and is at parity or slower below that. On the trajectory game, the GPU overtakes
+\todo{final thread count}-thread CPU by \todo{2.5--2.8}$\times$ once the horizon (and thus
+the KKT dimension) is large enough \todo{state the crossover: $T \gtrsim 30$, $d \gtrsim
+2000$}; below that, and for the small dense QPs at small batch sizes, the CPU is faster or
+at parity \todo{quantify both regimes}. The mechanism is the batched sparse
+factorization itself: \texttt{cuDSS} processes the whole batch as a single device-side
+call whose fixed launch and occupancy overhead is amortized better as each instance's
+matrix grows, whereas the CPU's per-thread \texttt{KLU} factorization has no comparable
+fixed cost to amortize. \todo{confirm this mechanism claim against the isolated
+per-call factorize timing from the benchmark suite, per the ``investigate, don't assume''
+rule---the crossover should be visible in raw \texttt{jacobian!+factorize!} timing, not
+just end-to-end.}
+
+Two caveats bound this result and are reported plainly. First, the trajectory game's
+solved fraction declines at long horizons \todo{state the numbers, e.g.\ $\sim$X\% at
+$T=50$}, so the large-$T$ GPU-vs-CPU ratios compare backends on a harder instance
+distribution, not just a larger one. Second, the QP problem-size sweep is confounded by
+the random generator's solved fraction changing sharply with $n_x$, so we treat it as
+indicative rather than a clean, isolated measurement of per-instance-size scaling.
+\todo{after the fresh run, restate these caveats with final numbers, and note the
+large-batch (\texttt{cuDSS}) OOM behavior if it still reproduces.}
+
+\begin{figure}[t]
+  \centering
+  \fbox{\begin{minipage}[c][0.22\textheight][c]{0.9\columnwidth}
+    \centering
+    \todo{two-panel GPU-vs-CPU plot: (left) speedup vs.\ batch size $B$ at fixed
+    per-instance size; (right) speedup vs.\ per-instance size (QP $n_x$ / game horizon
+    $T$) at fixed $B$. Horizontal line at $1\times$ marks the CPU-parity crossover.}
+  \end{minipage}}
+  \caption{GPU (\texttt{cuDSS}) vs.\ CPU batched throughput. The GPU overtakes the CPU
+  only once the per-instance problem is large enough to amortize \texttt{cuDSS}'s
+  fixed batched-factorization overhead.}
+  \label{fig:gpu}
+\end{figure}
 
 \section{Discussion and Future Work}
 \label{sec:discussion}
