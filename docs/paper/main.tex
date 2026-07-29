@@ -579,13 +579,13 @@ closes (or reverses) the gap to \texttt{PATH}; update this paragraph and
     \midrule
     \multirow{3}{*}{Random QP}
       & \texttt{PATH}                    & $\cdot$ & $\cdot$ \\
-      & \texttt{InteriorPoint} (UMFPACK) & $\cdot$ & $\cdot$ \\
-      & \texttt{InteriorPoint} (KLU)     & $\cdot$ & $\cdot$ \\
+      & \cref{alg:solver} (UMFPACK) & $\cdot$ & $\cdot$ \\
+      & \cref{alg:solver} (KLU)     & $\cdot$ & $\cdot$ \\
     \midrule
     \multirow{3}{*}{Trajectory game}
       & \texttt{PATH}                    & $\cdot$ & $\cdot$ \\
-      & \texttt{InteriorPoint} (UMFPACK) & $\cdot$ & $\cdot$ \\
-      & \texttt{InteriorPoint} (KLU)     & $\cdot$ & $\cdot$ \\
+      & \cref{alg:solver} (UMFPACK) & $\cdot$ & $\cdot$ \\
+      & \cref{alg:solver} (KLU)     & $\cdot$ & $\cdot$ \\
     \bottomrule
   \end{tabular}
   \caption{Single-instance reliability and speed. Solved fraction and mean per-solve
@@ -620,14 +620,14 @@ parallelization---from the first.
     Problem & Solver & Total time & Solved & Speedup \\
     \midrule
     \multirow{3}{*}{Random QP}
-      & \texttt{PATH} (seq.)              & $\cdot$ & $\cdot$ & $1\times$ \\
-      & \texttt{InteriorPoint} (seq.)     & $\cdot$ & $\cdot$ & $\cdot$ \\
-      & \texttt{BatchedInteriorPoint}     & $\cdot$ & $\cdot$ & $\cdot$ \\
+      & \texttt{PATH}              & $\cdot$ & $\cdot$ & $1\times$ \\
+      & \cref{alg:solver}     & $\cdot$ & $\cdot$ & $\cdot$ \\
+      & \cref{alg:batched}     & $\cdot$ & $\cdot$ & $\cdot$ \\
     \midrule
     \multirow{3}{*}{Trajectory game}
-      & \texttt{PATH} (seq.)              & $\cdot$ & $\cdot$ & $1\times$ \\
-      & \texttt{InteriorPoint} (seq.)     & $\cdot$ & $\cdot$ & $\cdot$ \\
-      & \texttt{BatchedInteriorPoint}     & $\cdot$ & $\cdot$ & $\cdot$ \\
+      & \texttt{PATH}              & $\cdot$ & $\cdot$ & $1\times$ \\
+      & \cref{alg:solver}     & $\cdot$ & $\cdot$ & $\cdot$ \\
+      & \cref{alg:batched}     & $\cdot$ & $\cdot$ & $\cdot$ \\
     \bottomrule
   \end{tabular}
   \caption{Batched throughput on CPU. Total wall-clock and solved fraction to clear a batch of
