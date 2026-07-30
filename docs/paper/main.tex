@@ -104,14 +104,14 @@ solving, in which many parameter instances are solved simultaneously and in para
 either across CPU threads or on an NVIDIA GPU, behind a single solver implementation.
 On a multi-agent lane-change trajectory game representative of robotics planning
 problems, our CPU-multithreaded batched solver clears a batch of parametric instances
-60--80$\times$ faster than sequential calls to \texttt{PATH}, and our GPU backend
-clears the same batches roughly $20\times$ faster than \texttt{PATH} \todo{finalize the
-GPU-vs-CPU comparison for the trajectory game once the latest benchmark numbers are
-in---earlier runs showed GPU trailing CPU here, but that may no longer hold}. We
-describe the solver's interior-point formulation, the abstraction that lets a single
-solver implementation run unmodified across dense, batched-sparse, and single-large
-linear-algebra backends, and report benchmarks against \texttt{PATH} on both randomly
-generated quadratic programs and trajectory games.
+about two orders of magnitude faster than sequential calls to \texttt{PATH}. A GPU
+backend, running the same solver implementation unmodified, also clears these batches far
+faster than \texttt{PATH}, but does not outperform the multithreaded CPU on this problem;
+the GPU pulls ahead only once each per-instance KKT system grows large, and we characterize
+this regime dependence. We describe the solver's interior-point formulation, the
+abstraction that lets a single solver implementation run unmodified across dense,
+batched-sparse, and single-large linear-algebra backends, and report benchmarks against
+\texttt{PATH} on both randomly generated quadratic programs and trajectory games.
 \end{abstract}
 
 \section{Introduction}
@@ -142,9 +142,9 @@ We present \texttt{MixedComplementarityProblems.jl}, an open-source, pure Julia 
 
 As \cref{fig:teaser} previews and \cref{sec:experiments} quantifies, on a
 multi-agent lane-change trajectory game representative of robotics planning problems,
-clearing a batch of parametric instances with our batched solver takes a small fraction
-of the wall-clock time required to clear the same batch with sequential calls to
-\texttt{PATH}. \todo{replace with the top-line numerical speedup results when they are finalized}
+clearing a batch of parametric instances with our batched solver is about two orders of
+magnitude faster than clearing the same batch with sequential calls to \texttt{PATH}
+(\cref{sec:exp:throughput}).
 
 \section{Background: Mixed Complementarity Problems}
 \label{sec:background}
@@ -539,58 +539,70 @@ compare the batched interior point solver (\cref{alg:batched}) in both its CPU
 (multithreaded) and GPU (cuDSS) configurations.
 
 \paragraph{Hardware and software}
-All CPU experiments run on \todo{final CPU: model, physical core count} with
-\todo{RAM} of RAM; GPU experiments run on \todo{final GPU: model, VRAM}. We use Julia
-\todo{version} and report the median of \todo{$n$} repetitions after a separate warm-up
-solve to exclude compilation time. \todo{state PATH version / license} Unless noted, we
-use a convergence tolerance of $\bar K = 10^{-4}$; we report each batch's
-\emph{solved fraction} (instances reaching $\|K_0\| \le \bar K$) and its total
-wall-clock time to clear all $B$ instances.
+All experiments run on a single workstation with an AMD Ryzen 9 7950X CPU (16 physical
+cores / 32 hardware threads) and 126~GB of RAM; GPU experiments use an NVIDIA GeForce
+RTX~4090 (24~GB). We use Julia 1.12.6, run the CPU-multithreaded solver with 32 threads,
+and access \texttt{PATH} through \texttt{PATHSolver.jl}. All timings are taken after a
+separate warm-up solve to exclude compilation. Per-solve times (\cref{tab:single}) are
+summarized as mean~$\pm$~standard deviation over the $B$ instances of a batch; batched
+throughput (\cref{tab:throughput}) is the total wall-clock to clear the batch, which varies
+modestly across repetitions (standard deviation under about $20\%$). Unless noted, we use a
+convergence tolerance of $\bar K = 10^{-4}$ and report each batch's \emph{solved fraction}
+(instances reaching $\|K_0\| \le \bar K$) and its total wall-clock time to clear all $B$
+instances.
 
 \subsection{Single-instance reliability and speed}
 \label{sec:exp:single}
 
-Before batching, we evaluate the performance of \cref{alg:solver} vs. \texttt{PATH}
-\texttt{PATH} on individual problems (i.e., not batched). \cref{tab:single} reports, for each problem family,
-the fraction of instances each solver converges on and its mean \todo{pm
-  standard deviation} per-solve wall-clock.
-Two results are readily apparent. First, \cref{alg:solver} solves virtually the
-same fraction of problems as \texttt{PATH}, confirming \cref{alg:solver}'s reliability. Second, on a \emph{single} instance \cref{alg:solver} is somewhat slower than \texttt{PATH} \todo{quantify the per-solve
-gap---expected to be a small constant factor, not an order of magnitude}, which is
-unsurprising: \texttt{PATH} is a mature, heavily optimized solver, and a single solve gives
-our solver no opportunity to exploit computational parallelism.
-The batched results below show that this modest per-instance handicap is more
-than repaid when solving more than a handful of parametrically-related instances.
+Before batching, we evaluate \cref{alg:solver} against \texttt{PATH} on individual
+(unbatched) problems. \cref{tab:single} reports, for each problem family, the fraction of
+instances each solver converges on and its per-solve wall-clock, over $1024$ random
+instances (QP: $n_x = 32$, $n_\mu = 16$; trajectory game: $T = 10$).
+Two results stand out. First, \cref{alg:solver} is about as reliable as \texttt{PATH}:
+it converges on $431$ of the $1024$ QP instances to \texttt{PATH}'s $437$ (the remainder
+being infeasible), and on \emph{all} $1024$ trajectory games, where \texttt{PATH} itself
+declares $28$ failures.
+Second---and in contrast to what one might expect against a mature, heavily optimized
+solver---once its Newton system is factored with \texttt{KLU} (see below), \cref{alg:solver}
+is per-solve \emph{competitive with, and often faster than}, \texttt{PATH}: its median solve
+is roughly $7\times$ faster on the QP and $55\times$ faster on the trajectory game. On the
+QP its \emph{mean} is nonetheless comparable to \texttt{PATH}'s, because the infeasible
+random instances form a heavy tail---they iterate to the round limit before being declared
+failures---which inflates the mean well above the median (hence the large standard
+deviations in \cref{tab:single}). The batched results below then add a further, orthogonal
+speedup from parallelism.
 
-\todo{KLU experiment: the unbatched solver currently factors $\nabla K_\rho$ with
-\texttt{UMFPACK} (LinearSolve.jl's default). The batched CPU path instead uses \texttt{KLU}
-with in-place refactorization, which reuses the pivot ordering across Newton steps and is
-substantially faster on these small, repeatedly-refactored systems. Re-run the
-single-instance baseline with \texttt{KLU} in the unbatched solver and report whether it
-closes (or reverses) the gap to \texttt{PATH}; update this paragraph and
-\cref{tab:single} accordingly.}
+The sparse linear solver used inside \cref{alg:solver} matters substantially here.
+\cref{alg:solver} refactorizes the regularized Jacobian of \cref{eq:newton} at every Newton
+step, always with the same sparsity pattern. \texttt{KLU} and \texttt{UMFPACK} are both
+standard direct solvers for sparse linear systems; \texttt{KLU}'s in-place refactorization,
+which reuses the symbolic analysis and pivot ordering across steps, is $4$--$6\times$ faster
+per solve than \texttt{UMFPACK} on these repeatedly refactored systems, at identical
+reliability (\cref{tab:single}). We therefore adopt \texttt{KLU} by default; it is also the
+factorization the batched CPU backend uses (\cref{sec:batched}).
 
 \begin{table}[t]
   \centering
   \begin{tabular}{llcc}
     \toprule
-    Problem & Solver & Solved & Time / solve \\
+    Problem & Solver & Solved & Time / solve (ms) \\
     \midrule
     \multirow{3}{*}{Random QP}
-      & \texttt{PATH}                    & $\cdot$ & $\cdot$ \\
-      & \cref{alg:solver} (UMFPACK) & $\cdot$ & $\cdot$ \\
-      & \cref{alg:solver} (KLU)     & $\cdot$ & $\cdot$ \\
+      & \texttt{PATH}               & $437/1024$ & $4.4 \pm 5.1$ \\
+      & \cref{alg:solver} (UMFPACK) & $431/1024$ & $17.7 \pm 19.6$ \\
+      & \cref{alg:solver} (KLU)     & $431/1024$ & $4.7 \pm 6.3$ \\
     \midrule
     \multirow{3}{*}{Trajectory game}
-      & \texttt{PATH}                    & $\cdot$ & $\cdot$ \\
-      & \cref{alg:solver} (UMFPACK) & $\cdot$ & $\cdot$ \\
-      & \cref{alg:solver} (KLU)     & $\cdot$ & $\cdot$ \\
+      & \texttt{PATH}               & $996/1024$ & $45.2 \pm 22.3$ \\
+      & \cref{alg:solver} (UMFPACK) & $1024/1024$ & $5.5 \pm 4.4$ \\
+      & \cref{alg:solver} (KLU)     & $1024/1024$ & $0.9 \pm 0.5$ \\
     \bottomrule
   \end{tabular}
-  \caption{Single-instance reliability and speed. Solved fraction and mean per-solve
-    wall-clock over \todo{$n$} random instances of each family (QP: $n_x=\todo{},
-    n_\mu=\todo{}$; trajectory game: $T=\todo{}$).
-    \todo{populate all cells from the fresh single-instance run; do not ship placeholders}}
+  \caption{Single-instance reliability and speed: solved fraction and per-solve wall-clock
+    (mean~$\pm$~std, in ms) over $1024$ random instances of each family (QP: $n_x = 32$,
+    $n_\mu = 16$; trajectory game: $T = 10$). The infeasible QP instances make the
+    per-solve distribution bimodal, so the mean sits well above the median (QP medians:
+    \texttt{PATH} $4.1$, UMFPACK $2.5$, KLU $0.6$~ms).}
   \label{tab:single}
 \end{table}
 
@@ -598,19 +610,34 @@ closes (or reverses) the gap to \texttt{PATH}; update this paragraph and
 \label{sec:exp:throughput}
 
 The batched solver's purpose is to clear an entire batch at once. \cref{tab:throughput}
-reports the total wall-clock to solve a batch of $B = \todo{}$ instances of each family
+reports the total wall-clock to solve a batch of $B = 1024$ instances of each family
 three ways: sequential \texttt{PATH} calls, sequential unbatched \cref{alg:solver}
-calls, and a single \cref{alg:batched} call across
-\todo{final thread count} CPU threads.
-As shown in
-\cref{fig:teaser}(b), on the trajectory game, the CPU-multithreaded batched solver clears
-the batch \todo{60--80}$\times$ faster than sequential \texttt{PATH}
-\todo{finalize; confirm the QP speedup as well}. The speedup comes from two compounding sources:
-sharing the symbolic $(G, H)$ structure across the batch (assembled and sparsity-analyzed
-once), and parallelizing the per-instance factorize/solve across threads. Note that the
-comparison against the sequential \cref{alg:solver} isolates the second
-effect---due purely to
-parallelization---from the first.
+calls, and via a single \cref{alg:batched} call across $32$ CPU threads.
+As previewed in \cref{fig:teaser}(b), on the trajectory game the CPU-multithreaded batched
+solver clears the batch roughly $110\times$ faster than sequential \texttt{PATH}; even the
+\emph{unbatched} solver is already $\sim\!48\times$ faster than \texttt{PATH} here, because
+its per-solve cost is so much lower (\cref{tab:single}), and batching then adds a further
+$\sim\!2\times$ on top.
+
+On the QP the batched solver is $6.6\times$ faster than \texttt{PATH}, even though the
+\emph{sequential} unbatched solver is here slightly slower than \texttt{PATH} in total
+(\cref{tab:throughput}). This is a consequence of the infeasible instances. Roughly half of
+the random QPs are infeasible, and each such instance runs all the way to
+\cref{alg:solver}'s outer-iteration limit before it is declared a failure; these few
+expensive solves dominate the \emph{sequential} total, even though the typical (feasible)
+solve is fast (\cref{tab:single}). The batched solver absorbs this tail: the infeasible
+instances are factored and stepped in parallel with the rest, and the per-instance stall
+detection of \cref{alg:batched} freezes them early, so they no longer gate the total. The
+batched solver therefore clears the whole batch $6.6\times$ faster than \texttt{PATH}
+despite the tail.
+
+The batched speedup comes from two compounding sources: sharing the symbolic
+$(G, H)$ structure across the batch (assembled and sparsity-analyzed once), and
+parallelizing the per-instance factorize/solve across threads. Comparing against the
+sequential \cref{alg:solver} isolates the second effect---due purely to
+parallelization---from the first: it is $9.7\times$ on the QP but only $2.2\times$ on the
+game, where each per-instance solve is already inexpensive, so there is less serial work
+for threading to absorb.
 
 \begin{table}[t]
   \centering
@@ -619,19 +646,19 @@ parallelization---from the first.
     Problem & Solver & Total time & Solved & Speedup \\
     \midrule
     \multirow{3}{*}{Random QP}
-      & \texttt{PATH}              & $\cdot$ & $\cdot$ & $1\times$ \\
-      & \cref{alg:solver}     & $\cdot$ & $\cdot$ & $\cdot$ \\
-      & \cref{alg:batched}     & $\cdot$ & $\cdot$ & $\cdot$ \\
+      & \texttt{PATH}          & $3.84$~s & $437/1024$ & $1\times$ \\
+      & \cref{alg:solver}      & $5.61$~s & $431/1024$ & $0.7\times$ \\
+      & \cref{alg:batched}     & $0.58$~s & $424/1024$ & $\mathbf{6.6\times}$ \\
     \midrule
     \multirow{3}{*}{Trajectory game}
-      & \texttt{PATH}              & $\cdot$ & $\cdot$ & $1\times$ \\
-      & \cref{alg:solver}     & $\cdot$ & $\cdot$ & $\cdot$ \\
-      & \cref{alg:batched}     & $\cdot$ & $\cdot$ & $\cdot$ \\
+      & \texttt{PATH}          & $46.5$~s & $996/1024$ & $1\times$ \\
+      & \cref{alg:solver}      & $0.97$~s & $1024/1024$ & $47.9\times$ \\
+      & \cref{alg:batched}     & $0.44$~s & $1024/1024$ & $\mathbf{105.7\times}$ \\
     \bottomrule
   \end{tabular}
-  \caption{Batched throughput on CPU. Total wall-clock and solved fraction to clear a batch of
-    $B=\todo{}$ instances, and speedup of the batched CPU solver over each sequential
-    baseline. \todo{populate from the fresh throughput run}}
+  \caption{Batched throughput on CPU. Total wall-clock and solved fraction to clear a batch
+    of $B = 1024$ instances, and speedup over sequential \texttt{PATH}. Both our solvers use
+    the \texttt{KLU} factorization.}
   \label{tab:throughput}
 \end{table}
 
@@ -660,49 +687,66 @@ reached, for both problem families}
 \subsection{GPU vs.\ CPU: a regime-dependent crossover}
 \label{sec:exp:gpu}
 
-Depending on the setting, GPU can outperform \emph{or} underperform
-multithreaded CPU operation. To characterize the tradeoffs directly, we report
-independent sweeps of the batch size $B$ at fixed per-instance size (cf. \cref{fig:gpu}, left), and
-per-instance size---determined by the number of primal variables $n_x$ in the QP
-setting, and by the planning horizon $T$ in the trajectory game---at fixed $B$ (cf. \cref{fig:gpu}, right).
+Whether the GPU backend beats the multithreaded CPU depends on the problem regime.
+Because both backends run the same solver loop behind the verb set of \cref{sec:batched},
+this comparison isolates the linear-algebra backend. We sweep two axes independently
+(\cref{fig:gpu}): the batch size $B$ at fixed per-instance size (left), and the
+per-instance size at fixed $B$ (right)---controlled by the number of primal variables
+$n_x$ in the QP and by the horizon $T$ in the trajectory game.
 
-The consistent pattern in \cref{fig:gpu} is that the GPU backend wins once
-problem instances grow large
-enough, and is at parity or slower below that threshold. On the trajectory game, the GPU overtakes
-\todo{final thread count}-thread CPU by \todo{2.5--2.8}$\times$ once the horizon (and thus
-the KKT dimension) is large enough \todo{state the crossover: $T \gtrsim 30$, $d \gtrsim
-2000$}; below that, and for the small dense QPs at small batch sizes, the CPU is faster or
-at parity \todo{quantify both regimes}.
+The GPU wins only once each per-instance KKT system is both large \emph{and} dense.
+On the QP it pulls ahead as the batch grows (up to $1.8\times$ faster than the $32$-thread
+CPU at $B = 4096$) and, more strongly, as the per-instance system grows: at $n_x = 128$ the
+GPU is $2$--$3\times$ faster. On the trajectory game, by contrast, the CPU is faster at
+\emph{every} horizon we tested: at $T = 30$ ($d \approx 2000$) the GPU takes $7.9$\,s to the
+CPU's $4.5$\,s ($1.7\times$ slower), and at $T = 50$ ($d \approx 3500$), $17.9$\,s to
+$12.6$\,s. Both backends nonetheless clear these batches far faster than sequential
+\texttt{PATH}.
 
-The mechanism which explains this pattern is the batched sparse
-factorization itself: \texttt{cuDSS} processes the whole batch as a single device-side
-call whose fixed launch and occupancy overhead amortizes as the size of each
-instance's KKT Jacobian grows, whereas the CPU's per-thread \texttt{KLU} factorization has no comparable
-fixed cost to amortize. \todo{confirm this mechanism claim against the isolated
-per-call factorize timing from the benchmark suite, per the ``investigate, don't assume''
-rule---the crossover should be visible in raw \texttt{jacobian!+factorize!} timing, not
-just end-to-end.}
+At first glance this is puzzling: the game's KKT systems are the \emph{largest} we solve,
+yet they are exactly where the GPU loses. The resolution is that two opposing effects govern
+end-to-end cost, and they separate cleanly when the batched linear-algebra verbs
+(\texttt{jacobian!}, \texttt{factorize!}, \texttt{ldiv!}) are timed in isolation.
+\emph{Per Newton step, with the whole batch active}, the GPU's batched sparse factorization
+does become cheaper than the CPU's per-thread \texttt{KLU} as each instance's Jacobian grows:
+its combined assemble-and-factorize cost crosses over the CPU's at $d \approx 2500$
+($T \approx 35$) and is $\sim\!1.4\times$ cheaper by $d \approx 4900$, because \texttt{cuDSS}
+amortizes its fixed launch and occupancy overhead better as the matrix grows while the CPU
+factorization has no comparable fixed cost. \emph{But a full solve does not run with the whole
+batch active.} \cref{alg:batched}'s active set shrinks as instances converge or are frozen,
+and on the CPU each step factorizes only the still-active instances (\cref{sec:batched}),
+whereas \texttt{cuDSS} always processes the entire batch. Measured at $d = 3500$, the GPU's
+per-step advantage of $1.3\times$ with all $1024$ instances active inverts to an $8\times$
+\emph{disadvantage} once only $32$ remain active. Since a real solve spends most of its steps
+with a small active set, the CPU wins end-to-end even where the GPU wins the isolated kernel.
+The GPU therefore prevails only when each per-instance system is large enough for
+\texttt{cuDSS} to win the per-step comparison \emph{and} dense enough---as in the large-$n_x$
+QP---that its factorization advantage is large; the sparse, moderate-horizon trajectory-game
+systems meet the first condition but not the second.
 
-Two caveats bound this result and are reported plainly. First, the fraction of
-trajectory games solved in each batch declines at longer time horizons \todo{state the numbers, e.g.\ $\sim$X\% at
-$T=50$}, so the large-$T$ GPU-vs-CPU ratios compare backends on a harder instance
-distribution, not just a larger one. Second, the QP problem-size sweep is confounded by
-the fraction of solved random instances changing sharply with the primal
-dimension $n_x$.
-\todo{after the fresh run, restate these caveats with final numbers, and note the
-large-batch (\texttt{cuDSS}) OOM behavior if it still reproduces.}
+Two caveats bound the game results. First, the batch's solved fraction declines at longer
+horizons even with warm starting ($92\%$ at $T = 30$, $57\%$ at $T = 50$), and cold starting
+collapses it further, so we restrict the game comparison to the warm-started regime and do
+not over-interpret very long horizons. Second, the QP problem-size sweep is confounded: the
+random generator's solved fraction changes sharply with $n_x$ ($41\% \to 96\% \to 100\%$ from
+$32$ to $128$ primals), so that sweep is indicative rather than a clean isolation of
+per-instance size.
 
 \begin{figure}[t]
   \centering
   \fbox{\begin{minipage}[c][0.22\textheight][c]{0.9\columnwidth}
     \centering
-    \todo{two-panel GPU-vs-CPU plot: (left) speedup vs.\ batch size $B$ at fixed
-    per-instance size; (right) speedup vs.\ per-instance size (QP $n_x$ / game horizon
-    $T$) at fixed $B$. Horizontal line at $1\times$ marks the CPU-parity crossover.}
+    \todo{two-panel GPU-vs-CPU plot from \texttt{benchmark/results/} (\texttt{experiments.csv}
+    gpu\_scaling/problem\_size rows, \texttt{per\_rep.csv}): (left) CPU/GPU throughput ratio
+    vs.\ batch size $B$ at fixed per-instance size; (right) vs.\ per-instance size (QP $n_x$
+    / game horizon $T$) at fixed $B$. A curve per family (QP, game); horizontal line at
+    $1\times$ marks parity.}
   \end{minipage}}
-  \caption{GPU (\texttt{cuDSS}) vs.\ CPU batched throughput. The GPU overtakes the CPU
-  only once the per-instance problem is large enough to amortize \texttt{cuDSS}'s
-  fixed batched-factorization overhead.}
+  \caption{GPU (\texttt{cuDSS}) vs.\ CPU batched throughput. The GPU pulls ahead only for
+  large, dense per-instance systems (the QP at large $n_x$ or large $B$); on the sparse
+  trajectory-game systems the multithreaded CPU is faster at every horizon, because its
+  active-set skip factorizes only the still-active instances each step while \texttt{cuDSS}
+  always processes the whole batch.}
   \label{fig:gpu}
 \end{figure}
 
