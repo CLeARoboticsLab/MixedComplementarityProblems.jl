@@ -295,8 +295,7 @@ and all other entries zero.
 
 We implement two additional subtleties. First, on line~\ref{line:linesearch}, we conduct a
 ``fraction to the boundary'' linesearch to control the rate at which $z, \mu
-\ge 0$ can approach $0$ (cf. \todo{reference to Nocedal and Wright's book where
-  they talk about this}). At each iteration $k$, stepsizes $\alpha_k, \beta_k$ are chosen so that
+\ge 0$ can approach $0$ (cf. \cite[\S19]{nocedal2006numerical}). At each iteration $k$, stepsizes $\alpha_k, \beta_k$ are chosen so that
 \begin{equation}
 \label{eq:linesearch}
 \begin{aligned}
@@ -467,7 +466,7 @@ consume the maximum iteration count.
 On CPU, the shared sparsity pattern is assembled once and each instance's numeric
 factorization of $\nabla K_\rho$ reuses the pivot ordering computed on the first
 outer round; the $B$ instances are distributed across threads. Because each
-instance's factorization is an independent per-instance sparse LU (KLU) \todo{ref}, skipping an
+instance's factorization is an independent per-instance sparse LU (KLU) \cite{davis2010algorithm}, skipping an
 inactive instance at line~\ref{line:batched-solve} is a literal per-instance branch: an
 instance with status$_b \ne \texttt{active}$ costs nothing beyond a boolean check, so
 CPU throughput scales with the number of instances still active, not $B$.
@@ -531,7 +530,7 @@ distribution of scenarios exactly as a scenario-based planner would encounter
 
 \paragraph{Baselines}
 The primary baseline is \texttt{PATH}~\cite{dirkse1995path}, accessed through
-\texttt{PATHSolver.jl} \todo{cite} and \texttt{ParametricMCPs.jl} \todo{cite}; \texttt{PATH} solves one instance
+\texttt{PATHSolver.jl} \cite{PATHSolver} and \texttt{ParametricMCPs.jl} \cite{ParametricMCPs}; \texttt{PATH} solves one instance
 at a time on a single thread. We additionally report our own \emph{unbatched}
 interior point solver (\cref{alg:solver}) as an intermediate baseline: it isolates
 the cost of our interior-point formulation from the batching machinery, letting us
