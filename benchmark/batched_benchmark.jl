@@ -33,6 +33,7 @@ function benchmark_throughput(
     run_batched = true,
     run_sequential_ip = true,
     run_path = true,
+    use_initial_guess = true,
 )
     @info "Generating random problems..."
     problem = generate_test_problem(benchmark_type; problem_kwargs...)
@@ -121,8 +122,10 @@ function benchmark_throughput(
     # Per-`benchmark_type` initial guess for the batched solve (e.g. the trajectory
     # game's zero-input rollout — see `generate_initial_guess` in
     # `trajectory_game_benchmark.jl`); `nothing` (cold zero start) for benchmark types
-    # that don't override it, matching prior behavior.
-    X₀ = run_batched ?
+    # that don't override it, matching prior behavior. Set `use_initial_guess = false` to
+    # force the batched solve to cold-start too, matching the (cold) sequential IP and
+    # PATH baselines for an apples-to-apples comparison.
+    X₀ = (run_batched && use_initial_guess) ?
         generate_initial_guess(benchmark_type, batched_mcp, Θ, device; problem_kwargs...) :
         nothing
 
