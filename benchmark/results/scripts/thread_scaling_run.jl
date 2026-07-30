@@ -5,7 +5,7 @@ open(io->println(io,"problem,nthreads,total_time_s,num_solved,num_samples,throug
 row(a...) = open(io->println(io, join(a, ",")), OUT, "a")
 
 for (problem, btype, ns, pk) in (("qp", :qp, 1024, nothing),
-                                 ("game", :trajectory_game, 256, (; horizon=10)))
+                                 ("game", :trajectory_game, 1024, (; horizon=10)))
     @info "thread scaling: $problem ..."
     data = isnothing(pk) ? thread_scaling_benchmark(btype; num_samples=ns) :
                            thread_scaling_benchmark(btype; num_samples=ns, problem_kwargs=pk)

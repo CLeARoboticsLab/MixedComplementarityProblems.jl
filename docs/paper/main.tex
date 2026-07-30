@@ -668,17 +668,19 @@ for threading to absorb.
 \label{sec:exp:threads}
 
 \cref{fig:threadscaling} shows batched throughput (instances cleared per second) as a
-function of the number of CPU threads, at fixed batch size. Because each instance's
-sparse factorization is independent (cf. \cref{sec:batched}), throughput increases with the
-thread count, though sublinearly. On the QP, throughput rises from $386$ instances/s
-single-threaded to $1821$ instances/s at $32$ threads (a $4.7\times$ speedup), with the
-steepest gains over the first few threads and diminishing returns thereafter. The
-trajectory game follows the same qualitative trend but peaks near the $16$ physical cores,
-at roughly $1970$ instances/s, and then \emph{regresses} slightly when the machine is
-oversubscribed to $32$ hardware threads---its batch is small enough that, once spread across
-more than the physical cores, per-thread overhead outweighs the added parallelism, whereas
-the larger QP batch still benefits marginally from simultaneous multithreading. In both
-cases the batched solver extracts substantial parallel throughput from commodity multicore
+function of the number of CPU threads, at a fixed batch size of $N = 1024$ for both problem
+families. Because each instance's sparse factorization is independent (cf. \cref{sec:batched}),
+throughput increases with the thread count, though sublinearly. The gains are concentrated in
+the first few threads: on the QP, throughput rises from $371$ instances/s single-threaded to
+$1211$ at four threads and peaks around $1500$ instances/s ($4\times$), while the trajectory
+game rises from $725$ to $2486$ instances/s at four threads ($3.4\times$) and then holds near
+that level. Beyond roughly the first four-to-eight threads both curves flatten: adding threads
+up to and past the $16$ physical cores yields no further systematic gain, only run-to-run
+noise, as simultaneous multithreading does not add useful parallelism for this factorization-bound
+workload. The game sustains higher absolute throughput than the QP despite the smaller
+speedup, because each game instance converges in fewer Newton iterations, whereas the QP batch
+is roughly $60\%$ infeasible-by-construction instances that are more expensive to rule out. In
+both cases the batched solver extracts substantial parallel throughput from commodity multicore
 hardware with no device-specific code.
 
 \begin{figure}[t]
@@ -687,13 +689,12 @@ hardware with no device-specific code.
     \centering
     \todo{thread-scaling plot from \texttt{benchmark/results/thread\_scaling.csv}: throughput
     (instances/s) vs.\ thread count, one curve per problem family, vertical marker at the $16$
-    physical cores. (Re-run the game at $N = 1024$ for a cleaner curve---the current $N = 256$
-    game run is noisy at low thread counts.)}
+    physical cores.}
   \end{minipage}}
-  \caption{Batched-solver throughput vs.\ CPU thread count at fixed batch size. Throughput
-  rises sublinearly with the thread count; the trajectory game peaks at the physical-core
-  count and regresses under simultaneous multithreading, while the larger QP batch continues
-  to gain modestly.}
+  \caption{Batched-solver throughput vs.\ CPU thread count at a fixed batch size of $N = 1024$.
+  Throughput rises sublinearly with the thread count, with the gains concentrated in the first
+  few threads; both problem families plateau around physical-core saturation, with no further
+  systematic gain from simultaneous multithreading.}
   \label{fig:threadscaling}
 \end{figure}
 
