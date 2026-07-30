@@ -774,28 +774,27 @@ instances roughly two orders of magnitude faster than sequential calls to \textt
 (\cref{sec:exp:throughput}) while matching its per-instance reliability
 (\cref{sec:exp:single})---and it does so on commodity hardware, with no device-specific code.
 The verb-set abstraction of \cref{sec:batched} is what makes this portable: the same interior
-point loop runs unmodified across a per-instance \texttt{KLU} backend, a batched-sparse GPU
-backend, and a dense backend, so the practitioner chooses a device rather than reimplementing a
-solver.
+point loop runs unmodified across both CPU and GPU backends.
 
 That abstraction also lets us characterize \emph{when} each device is the right choice, and the
-answer is regime-dependent (\cref{sec:exp:gpu}). The multithreaded CPU is the better default for
+answer is regime-dependent (cf. \cref{sec:exp:gpu}). The multithreaded CPU is the better default for
 the sparse, moderate-dimension KKT systems typical of receding-horizon trajectory games: its
 active-set skip factorizes only the still-active instances each Newton step, whereas \texttt{cuDSS}
-always processes the whole batch. The GPU pulls ahead only once each per-instance system is both
+always processes the whole batch. The GPU outperforms only once each per-instance system is both
 large and dense enough for its batched factorization to win the per-step comparison outright---the
-large-$n_x$ QP, or very large batches. A useful direction for future work is to close this gap
-from the GPU side by making the batched factorization active-set-aware, e.g.\ compacting the
+large-$n_x$ QP, or very large batches. Future work should close this gap by
+making the batched factorization aware of the set of active instances, e.g.\ compacting the
 active instances before each \texttt{cuDSS} call so that GPU per-step cost, like the CPU's, falls
-as the active set shrinks; this alone would move the crossover substantially in the GPU's favor on
-game-like problems.
+as the number of active instances shrinks; cf. \cite{viljoen2026scaling}, which
+implements a similar design (but for nonlinear programs rather than mixed
+complementarity problems).
 
 Several limitations temper these conclusions and motivate further work. Our reliability and timing
 comparisons use two problem families---randomly generated QPs and a single lane-change trajectory
-game---and, on the game, the fraction of solved instances declines at long horizons even with warm
-starting (\cref{sec:exp:gpu}); a broader benchmark suite and stronger globalization (e.g.\ homotopy
-or trust-region safeguards to handle the near-symmetric equilibria that stall Newton steps at long
-horizons) would both sharpen the evaluation and improve robustness. The most consequential
+game---and, on the trajectory game, the fraction of solved instances declines at long horizons even with warm
+starting (cf. \cref{sec:exp:gpu}). A broader benchmark suite would improve the
+prescriptive quality of our evaluations, and a more
+sophisticated interior point implementation is needed to improve robustness. The most consequential
 extension, however, is differentiability. Because our solver is a pure-Julia interior point method,
 solutions can in principle be differentiated with respect to problem parameters via the implicit
 function theorem applied to the MCP's KKT conditions, enabling MCPs (and the games they encode) to
@@ -804,7 +803,8 @@ practical limitations of \texttt{PATH} that motivated this work. Realizing that 
 quantifying the cost of a batched differentiable solve against the forward solve benchmarked here,
 is our primary next step. Finally, integrating the batched solver into a deployed receding-horizon
 planner would test the warm-started, real-time regime that these throughput numbers are meant to
-serve.
+serve. \todo{factor this content into the earlier theoretical sections and show
+  how it works already; no need for empirical evaluation}
 
 \bibliographystyle{IEEEtran}
 \bibliography{refs}
