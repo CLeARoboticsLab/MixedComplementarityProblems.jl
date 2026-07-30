@@ -668,21 +668,32 @@ for threading to absorb.
 \label{sec:exp:threads}
 
 \cref{fig:threadscaling} shows batched throughput (instances cleared per second) as a
-function of the number of CPU threads, for a fixed batch size. Because each instance's
-sparse factorization is independent (cf. \cref{sec:batched}), throughput scales
-\todo{near-linearly? sublinearly?} up to the number of physical cores and then
-\todo{plateaus/regresses} when the physical cores are saturated. \todo{report the peak throughput and the thread count at which it is
-reached, for both problem families}
+function of the number of CPU threads, at fixed batch size. Because each instance's
+sparse factorization is independent (cf. \cref{sec:batched}), throughput increases with the
+thread count, though sublinearly. On the QP, throughput rises from $386$ instances/s
+single-threaded to $1821$ instances/s at $32$ threads (a $4.7\times$ speedup), with the
+steepest gains over the first few threads and diminishing returns thereafter. The
+trajectory game follows the same qualitative trend but peaks near the $16$ physical cores,
+at roughly $1970$ instances/s, and then \emph{regresses} slightly when the machine is
+oversubscribed to $32$ hardware threads---its batch is small enough that, once spread across
+more than the physical cores, per-thread overhead outweighs the added parallelism, whereas
+the larger QP batch still benefits marginally from simultaneous multithreading. In both
+cases the batched solver extracts substantial parallel throughput from commodity multicore
+hardware with no device-specific code.
 
 \begin{figure}[t]
   \centering
   \fbox{\begin{minipage}[c][0.20\textheight][c]{0.9\columnwidth}
     \centering
-    \todo{thread-scaling plot: throughput (instances/s) vs.\ thread count, one curve per
-    problem family, with a vertical marker at the physical core count}
+    \todo{thread-scaling plot from \texttt{benchmark/results/thread\_scaling.csv}: throughput
+    (instances/s) vs.\ thread count, one curve per problem family, vertical marker at the $16$
+    physical cores. (Re-run the game at $N = 1024$ for a cleaner curve---the current $N = 256$
+    game run is noisy at low thread counts.)}
   \end{minipage}}
   \caption{Batched-solver throughput vs.\ CPU thread count at fixed batch size. Throughput
-  scales with the number of active instances until the physical cores are saturated.}
+  rises sublinearly with the thread count; the trajectory game peaks at the physical-core
+  count and regresses under simultaneous multithreading, while the larger QP batch continues
+  to gain modestly.}
   \label{fig:threadscaling}
 \end{figure}
 
