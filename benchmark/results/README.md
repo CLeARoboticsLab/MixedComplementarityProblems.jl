@@ -40,6 +40,8 @@ NVIDIA RTX 4090 24 GB; Julia 1.12.6). All runs used `julia -t 32 --project=bench
 | `per_instance.csv` | raw per-instance solve time + status for PATH & unbatched IP (N=1024, QP+game) — for violins / bimodality. |
 | `per_instance_table1.csv` | Table I raw: per-instance PATH vs IP(UMFPACK) vs IP(KLU). `table1_summary.txt` has the summary. |
 | `per_rep.csv` | raw per-repetition full-batch wall-clock for batched CPU/GPU (+ PATH totals), across the batch-size sweep. |
+| `throughput_klu.csv` | clean single-run throughput (PATH vs sequential IP vs batched CPU) with the KLU default — the source for the report's Table II. |
+| `thread_scaling.csv` | batched throughput vs CPU thread count (1–32), QP and game — the source for the thread-scaling figure. |
 | `percall_timing.csv` | per-call `jacobian!`/`factorize!`/`ldiv!` CPU-vs-GPU vs horizon (d) — the kernel crossover. |
 | `active_fraction_T50.csv` | GPU-vs-CPU vs active-set size at fixed d=3500 — the mechanism behind CPU winning end-to-end. |
 | `confirm_game_T30_median.txt` | median-of-5 game T=30 CPU-vs-GPU (cold+warm). |

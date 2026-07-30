@@ -1,0 +1,8 @@
+problem,solver,warm_start,total_time_s,num_solved,num_samples,tol
+qp,path,false,3.8392,437,1024,0.0001
+qp,ip_klu,false,5.6124,431,1024,0.0001
+qp,batched_cpu,false,0.5791,424,1024,0.0001
+game,path,false,46.4966,996,1024,0.0001
+game,ip_klu,false,0.9713,1024,1024,0.0001
+game,batched_cpu,false,0.44,1024,1024,0.0001
+game,batched_cpu,true,0.293,1024,1024,0.0001
