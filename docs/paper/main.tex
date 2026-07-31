@@ -549,7 +549,11 @@ throughput (\cref{tab:throughput}) is the total wall-clock to clear the batch, w
 modestly across repetitions (standard deviation under about $20\%$). Unless noted, we use a
 convergence tolerance of $\bar K = 10^{-4}$ and report each batch's \emph{solved fraction}
 (instances reaching $\|K_0\| \le \bar K$) and its total wall-clock time to clear all $B$
-instances.
+instances. For a fair comparison, \texttt{PATH} is held to the same convergence tolerance as
+our solver (its \texttt{convergence\_tolerance} option set to $10^{-4}$, rather than its
+tighter default of $10^{-6}$); in practice this makes a negligible difference to \texttt{PATH}'s
+timings, as its quadratic local convergence drives the residual well below either threshold in
+the same iteration.
 
 \subsection{Single-instance reliability and speed}
 \label{sec:exp:single}
@@ -648,14 +652,14 @@ for threading to absorb.
     Problem & Solver & Total time & Solved & Speedup \\
     \midrule
     \multirow{3}{*}{Random QP}
-      & \texttt{PATH}          & $3.84$~s & $437/1024$ & $1\times$ \\
+      & \texttt{PATH}          & $3.97$~s & $437/1024$ & $1\times$ \\
       & \cref{alg:solver}      & $5.61$~s & $431/1024$ & $0.7\times$ \\
-      & \cref{alg:batched}     & $0.58$~s & $424/1024$ & $\mathbf{6.6\times}$ \\
+      & \cref{alg:batched}     & $0.58$~s & $424/1024$ & $\mathbf{6.8\times}$ \\
     \midrule
     \multirow{3}{*}{Trajectory game}
-      & \texttt{PATH}          & $46.5$~s & $996/1024$ & $1\times$ \\
-      & \cref{alg:solver}      & $0.97$~s & $1024/1024$ & $47.9\times$ \\
-      & \cref{alg:batched}     & $0.44$~s & $1024/1024$ & $\mathbf{105.7\times}$ \\
+      & \texttt{PATH}          & $46.4$~s & $996/1024$ & $1\times$ \\
+      & \cref{alg:solver}      & $0.97$~s & $1024/1024$ & $47.8\times$ \\
+      & \cref{alg:batched}     & $0.44$~s & $1024/1024$ & $\mathbf{105.5\times}$ \\
     \bottomrule
   \end{tabular}
   \caption{Batched throughput on CPU. Total wall-clock time and solved fraction for clearing a batch
@@ -712,10 +716,10 @@ GPU outperforms batched CPU only once each per-instance KKT system is both large
 On the QP, the GPU backend pulls ahead as the batch grows larger (up to $1.8\times$ faster than the $32$-thread
 CPU at $B = 4096$) and, more strongly, as the per-instance system grows: at $n_x = 128$ the
 GPU is $2$--$3\times$ faster. On the trajectory game, by contrast, the CPU is faster at
-\emph{every} planning horizon we tested: at $T = 30$ ($d \approx 2000$) the GPU takes $7.9$\,s to the
-CPU's $4.5$\,s ($1.7\times$ slower), and at $T = 50$ ($d \approx 3500$), $17.9$\,s to
-$12.6$\,s. Both backends nonetheless clear these batches far faster than sequential
-\texttt{PATH}.
+\emph{every} planning horizon we tested (median of five repetitions): at $T = 30$
+($d \approx 2000$) the GPU takes $8.0$\,s to the CPU's $4.1$\,s ($1.9\times$ slower), and at
+$T = 50$ ($d \approx 3500$), $16.3$\,s to $12.7$\,s. Both backends nonetheless clear these
+batches far faster than sequential \texttt{PATH}.
 
 On its face, these results appear counterintuitive: the trajectory game KKT systems are the \emph{largest} we solve,
 yet here the GPU backend is uniformly slower than batched CPU. Two opposing effects govern

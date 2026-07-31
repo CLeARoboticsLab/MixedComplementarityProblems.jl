@@ -35,10 +35,10 @@ ip(mcp, θ, alg) = M.solve(M.InteriorPoint(), mcp, θ; tol=TOL, regularize_linea
 for b in built
     @info "table1: $(b.problem) ..."
     # warmups
-    ParametricMCPs.solve(b.path_mcp, b.θs[1]; warn_on_convergence_failure=false)
+    ParametricMCPs.solve(b.path_mcp, b.θs[1]; convergence_tolerance=TOL, warn_on_convergence_failure=false)
     ip(b.mcp, b.θs[1], UMF); ip(b.mcp, b.θs[1], KLU)
     for (i,θ) in enumerate(b.θs)
-        tp = @elapsed sp = ParametricMCPs.solve(b.path_mcp, θ; warn_on_convergence_failure=false)
+        tp = @elapsed sp = ParametricMCPs.solve(b.path_mcp, θ; convergence_tolerance=TOL, warn_on_convergence_failure=false)
         row(b.problem, b.sz, "path", i, round(tp;digits=6), sp.status==PATHSolver.MCP_Solved, TOL)
         tu = @elapsed su = ip(b.mcp, θ, UMF)
         row(b.problem, b.sz, "ip_umfpack", i, round(tu;digits=6), su.status==:solved, TOL)

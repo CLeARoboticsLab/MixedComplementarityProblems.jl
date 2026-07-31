@@ -147,7 +147,12 @@ function benchmark_throughput(
         tol,
         regularize_linear_solve,
     )
-    run_path && ParametricMCPs.solve(path_mcp, θs[1]; warn_on_convergence_failure = false)
+    run_path && ParametricMCPs.solve(
+        path_mcp,
+        θs[1];
+        convergence_tolerance = tol,
+        warn_on_convergence_failure = false,
+    )
 
     # --- Batched IP: one call over the whole batch, on `device`. ---
     batched = if run_batched
@@ -187,6 +192,7 @@ function benchmark_throughput(
             ParametricMCPs.solve(
                 path_mcp,
                 θ;
+                convergence_tolerance = tol,
                 warn_on_convergence_failure = false,
             ).status == PATHSolver.MCP_Solved
         end

@@ -38,9 +38,9 @@ end
 
 # per-instance sequential timings (PATH + unbatched IP), cold.
 function per_instance!(problem, sz, b)
-    ParametricMCPs.solve(b.path_mcp, b.θs[1]; warn_on_convergence_failure=false)          # warmup
+    ParametricMCPs.solve(b.path_mcp, b.θs[1]; convergence_tolerance=TOL, warn_on_convergence_failure=false)          # warmup
     for (i,θ) in enumerate(b.θs)
-        t = @elapsed s = ParametricMCPs.solve(b.path_mcp, θ; warn_on_convergence_failure=false)
+        t = @elapsed s = ParametricMCPs.solve(b.path_mcp, θ; convergence_tolerance=TOL, warn_on_convergence_failure=false)
         pirow(problem, sz, "path", i, round(t;digits=6), s.status==PATHSolver.MCP_Solved, TOL)
     end
     M.solve(M.InteriorPoint(), b.batched_mcp, b.θs[1]; tol=TOL, regularize_linear_solve=:identity) # warmup
@@ -66,9 +66,9 @@ end
 
 # few-rep sequential PATH totals (the serial baseline), cold.
 function per_rep_path!(problem, sz, b, N; reps=3)
-    ParametricMCPs.solve(b.path_mcp, b.θs[1]; warn_on_convergence_failure=false)
+    ParametricMCPs.solve(b.path_mcp, b.θs[1]; convergence_tolerance=TOL, warn_on_convergence_failure=false)
     for rep in 1:reps
-        t = @elapsed n = count(θ->ParametricMCPs.solve(b.path_mcp, θ; warn_on_convergence_failure=false).status==PATHSolver.MCP_Solved, b.θs)
+        t = @elapsed n = count(θ->ParametricMCPs.solve(b.path_mcp, θ; convergence_tolerance=TOL, warn_on_convergence_failure=false).status==PATHSolver.MCP_Solved, b.θs)
         prrow(problem, sz, "path", "na", false, rep, round(t;digits=6), n, N, TOL)
     end
 end
@@ -90,6 +90,31 @@ if stage == "throughput_raw"
             per_rep_batched!(problem, sz, btype, pkw, b, N, CPU, true)
             per_rep_batched!(problem, sz, btype, pkw, b, N, CUDA.CUDABackend(), true)
         end
+        GC.gc(); CUDA.reclaim()
+    end
+elseif stage == "problem_size_raw"
+    # Median-of-5 raw reps for the PROBLEM-SIZE sweep (fixed B=1024, varying per-instance size),
+    # to match the batch-size study's per-rep coverage. The base configs (qp p32i16, game T10 at
+    # B=1024) already have ≥30 reps from `throughput_raw`; here we fill the larger sizes.
+    #   • qp:   p64i32, p128i64          (cold; QP has no warm/initial-guess)
+    #   • game: T20, T30, T40, T50       (cold + warm, matching the T=30 median-of-5)
+    N = 1024
+    for (problem, btype, pkw, sz) in (("qp", QP(), (;num_primals=64,num_inequalities=32), "p64i32"),
+                                      ("qp", QP(), (;num_primals=128,num_inequalities=64), "p128i64"))
+        @info "problem_size_raw: $problem $sz N=$N building..."
+        b = build(btype, pkw, N)
+        per_rep_batched!(problem, sz, btype, pkw, b, N, CPU, false; reps=5)
+        per_rep_batched!(problem, sz, btype, pkw, b, N, CUDA.CUDABackend(), false; reps=5)
+        GC.gc(); CUDA.reclaim()
+    end
+    for T in (20, 30, 40, 50)
+        pkw = (;horizon=T); sz = "T$T"
+        @info "problem_size_raw: game $sz N=$N building..."
+        b = build(GAME(), pkw, N)
+        per_rep_batched!("game", sz, GAME(), pkw, b, N, CPU, false; reps=5)
+        per_rep_batched!("game", sz, GAME(), pkw, b, N, CUDA.CUDABackend(), false; reps=5)
+        per_rep_batched!("game", sz, GAME(), pkw, b, N, CPU, true; reps=5)
+        per_rep_batched!("game", sz, GAME(), pkw, b, N, CUDA.CUDABackend(), true; reps=5)
         GC.gc(); CUDA.reclaim()
     end
 elseif stage == "scaling_raw"

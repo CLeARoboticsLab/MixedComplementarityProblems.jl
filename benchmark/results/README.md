@@ -16,6 +16,15 @@ NVIDIA RTX 4090 24 GB; Julia 1.12.6). All runs used `julia -t 32 --project=bench
   infeasible). Report mean±std, or violins when bimodal, from the raw per-sample CSVs — not a
   single number. Batched sub-second timings are also noisy (GPU especially at large horizon), so
   we sample many repetitions.
+- **Matched tolerance for PATH.** All solvers, including `PATH`, are held to the same
+  convergence tolerance `1e-4`. `PATH` runs at its built-in default `convergence_tolerance = 1e-6`
+  unless the option is set explicitly, which would hold it to a 100× tighter bar than our solver;
+  every PATH call now passes `convergence_tolerance = tol`. In practice this changes PATH's
+  timings and solved counts negligibly (quadratic local convergence drives the residual below
+  both thresholds in the same iteration) — verified by re-running: identical solved counts, times
+  within run-to-run noise. `scripts/rerun_path_tol.jl` re-timed PATH at `1e-4` and patched the
+  PATH rows of every CSV in place, leaving all batched/IP/GPU rows untouched (the pre-fix PATH
+  numbers, at `1e-6`, are in git history).
 
 ## Key findings
 - **Batched solver vs PATH.** Both batched backends clear a batch far faster than sequential PATH
@@ -39,7 +48,7 @@ NVIDIA RTX 4090 24 GB; Julia 1.12.6). All runs used `julia -t 32 --project=bench
 | `experiments_warm_reference.csv` | earlier full warm sweep (old schema, no `warm_start` col; QP rows cold-valid, game rows warm). |
 | `per_instance.csv` | raw per-instance solve time + status for PATH & unbatched IP (N=1024, QP+game) — for violins / bimodality. |
 | `per_instance_table1.csv` | Table I raw: per-instance PATH vs IP(UMFPACK) vs IP(KLU). `table1_summary.txt` has the summary. |
-| `per_rep.csv` | raw per-repetition full-batch wall-clock for batched CPU/GPU (+ PATH totals), across the batch-size sweep. |
+| `per_rep.csv` | raw per-repetition full-batch wall-clock for batched CPU/GPU (+ PATH totals). Covers both the batch-size sweep (base configs `p32i16`/`T10` across `B`) and the problem-size sweep (`p64i32`, `p128i64`; game `T20`/`T30`/`T40`/`T50` at `B=1024`, cold+warm, median-of-5). |
 | `throughput_klu.csv` | clean single-run throughput (PATH vs sequential IP vs batched CPU) with the KLU default — the source for the report's Table II. |
 | `thread_scaling.csv` | batched throughput vs CPU thread count (1–32), QP and game — the source for the thread-scaling figure. |
 | `percall_timing.csv` | per-call `jacobian!`/`factorize!`/`ldiv!` CPU-vs-GPU vs horizon (d) — the kernel crossover. |
@@ -56,5 +65,11 @@ WARMSTART=0 STAGE=throughput   julia -t 32 --project=benchmark/gpu benchmark/res
 julia -t 32 --project=benchmark/gpu benchmark/results/scripts/percall.jl        # kernel crossover
 julia -t 32 --project=benchmark/gpu benchmark/results/scripts/active_frac.jl     # active-set mechanism
 julia -t 32 --project=benchmark/gpu benchmark/results/scripts/table1_klu.jl      # Table I (KLU vs UMFPACK)
-julia -t 32 --project=benchmark/gpu benchmark/results/scripts/raw_data.jl        # STAGE=throughput_raw|scaling_raw
+STAGE=throughput_raw    julia -t 32 --project=benchmark/gpu benchmark/results/scripts/raw_data.jl   # STAGE ∈ {throughput_raw, scaling_raw, problem_size_raw}
+julia -t 32 --project=benchmark/gpu benchmark/results/scripts/rerun_path_tol.jl  # re-time PATH at 1e-4, patch PATH rows in every CSV
 ```
+
+`problem_size_raw` (in `raw_data.jl`) fills the median-of-5 problem-size reps in `per_rep.csv`
+(QP `p64i32`/`p128i64`; game `T20`–`T50`); the base configs `p32i16`/`T10` already have ≥30
+reps from `throughput_raw`. `rerun_path_tol.jl` is CPU-only and must be run *after* any stage
+that regenerates a PATH-containing CSV, to restore matched-tolerance PATH numbers.

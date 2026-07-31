@@ -81,8 +81,16 @@ function benchmark(
         ip_kwargs...,
     )
 
+    # Hold PATH to the same convergence tolerance as the IP solver for a fair comparison.
+    path_tol = get(ip_kwargs, :tol, 1e-6)
+
     @info "Warming up PATH solver..."
-    ParametricMCPs.solve(path_mcp, first(θs); warn_on_convergence_failure = false)
+    ParametricMCPs.solve(
+        path_mcp,
+        first(θs);
+        convergence_tolerance = path_tol,
+        warn_on_convergence_failure = false,
+    )
 
     # Solve and time.
     ip_data = @showprogress desc = "Solving IP MCPs..." map(θs) do θ
@@ -98,8 +106,12 @@ function benchmark(
 
     path_data = @showprogress desc = "Solving PATH MCPs..." map(θs) do θ
         # Solve and time.
-        elapsed_time = @elapsed sol =
-            ParametricMCPs.solve(path_mcp, θ; warn_on_convergence_failure = false)
+        elapsed_time = @elapsed sol = ParametricMCPs.solve(
+            path_mcp,
+            θ;
+            convergence_tolerance = path_tol,
+            warn_on_convergence_failure = false,
+        )
 
         (; elapsed_time, success = sol.status == PATHSolver.MCP_Solved)
     end

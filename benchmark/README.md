@@ -148,9 +148,9 @@ batched backends clear a batch far faster than sequential `PATH` (game: CPU ~60�
   set collapses fast as instances sub-converge, the CPU spends most of the solve in the regime
   where it dominates. (This reverses the earlier claim here that the active-set skip was *not*
   the explanation.)
-- **Trajectory game, end-to-end** (`N = 1024`, warm, median-of-5): `horizon=30` CPU 4.54s vs
-  GPU 7.90s (GPU 1.74× slower); `horizon=50` CPU 12.6s vs GPU 17.9s. Solved fraction (warm) is
-  92% (`horizon=30`), 57% (`horizon=50`) — matching earlier runs; cold-start collapses it
+- **Trajectory game, end-to-end** (`N = 1024`, warm, median-of-5): `horizon=30` CPU 4.15s vs
+  GPU 8.01s (GPU 1.93× slower); `horizon=50` CPU 12.7s vs GPU 16.3s. Solved fraction (warm) is
+  93% (`horizon=30`), 57% (`horizon=50`) — matching earlier runs; cold-start collapses it
   (≈17% at `horizon=30`), so cold high-horizon GPU/CPU ratios compare two mostly-failing
   backends and aren't meaningful. GPU timings are also higher-variance at large horizon.
 - **QP** (`num_primals=32, num_inequalities=16`): the GPU pulls ahead as the batch grows
