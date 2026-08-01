@@ -9,12 +9,13 @@
 \usepackage{url}
 \usepackage[vlined,linesnumbered]{algorithm2e}
 \RestyleAlgo{ruled}
-\usepackage[hidelinks]{hyperref}
+\usepackage{hyperref}
 \usepackage{xcolor}
 \usepackage{caption}
 \usepackage{subcaption}
 \usepackage{amsthm}
 \newtheorem{remark}{Remark}
+\usepackage{nicefrac}
 
 \usepackage[capitalize,noabbrev,nameinlink]{cleveref}
 \crefformat{equation}{(#2#1#3)}
@@ -66,17 +67,18 @@
 
 \begin{abstract}
 Mixed complementarity problems (MCPs) arise as the first-order optimality conditions of
-nonlinear programs and noncooperative games, and give a natural formulation for the
+nonlinear programs and noncooperative games, and provide a natural formulation for
 multi-agent trajectory optimization problems that appear throughout robotics. The
-dominant solver for problems of this form is \texttt{PATH}, a mature but closed-source
-package. We present \texttt{MixedComplementarityProblems.jl}, an open-source, pure
-Julia implementation of an interior point method for parametric MCPs that (i) matches
-\texttt{PATH}'s reliability on standard benchmarks and (ii) natively supports batched
-solving, in which many parameter instances are solved simultaneously and in parallel,
-either across CPU threads or on an NVIDIA GPU, behind a single solver implementation.
+dominant solver for problems of this form is \texttt{PATH}, which offers strong
+performance on robotics problems but remains closed-source. We present \texttt{MixedComplementarityProblems.jl}, an open-source, pure
+Julia implementation of an interior point method for parametric MCPs that: (i) matches
+\texttt{PATH}'s reliability on standard benchmarks, (ii) natively supports
+batched, parallel processing of many parameter instances,
+either across CPU threads or on an NVIDIA GPU, and (iii) supports efficient
+automatic differentiation of solutions with respect to problem parameters.
 On a multi-agent lane-change trajectory game representative of robotics planning
 problems, our CPU-multithreaded batched solver clears a batch of parametric instances
-about two orders of magnitude faster than sequential calls to \texttt{PATH}. A GPU
+ $\sim\!100\times$ faster than sequential calls to \texttt{PATH}. A GPU
 backend, running the same solver implementation unmodified, also clears these batches far
 faster than \texttt{PATH}, but does not outperform the multithreaded CPU on this problem;
 the GPU pulls ahead only once each per-instance KKT system grows large, and we characterize
@@ -121,14 +123,14 @@ All three pose serious, practical limitations for use in robotics: (i) developer
   \label{fig:teaser}
 \end{figure}
 
-We present \texttt{MixedComplementarityProblems.jl}, an open-source, pure Julia solver for parametric MCPs that addresses all of these practical challenges. Concretely, we contribute:
+We present \href{https://github.com/CLeARoboticsLab/MixedComplementarityProblems.jl}{\texttt{MixedComplementarityProblems.jl}}, an open-source, pure Julia solver for parametric MCPs that addresses all of these practical challenges. Concretely, we contribute:
 \begin{itemize}
   \item A simple and easily-customized interior point method for parametric MCPs that matches \texttt{PATH}'s
   reliability on standard benchmarks, while supporting automatic differentiation of solutions with respect to problem parameters.
   \item A native \emph{batched} solve mode, in which many parameter instances sharing
   one MCP structure are solved simultaneously, parallelized across CPU threads or an
-  NVIDIA GPU behind a single solver implementation.
-  \item An abstraction boundary defined by a small verb set that separates the
+  NVIDIA GPU.
+  \item An abstraction boundary that separates the
     interior point loop and its linear algebra
   backend, which lets a single solver implementation run unmodified across dense,
   batched-sparse, and single-large-instance regimes, so that supporting a new device or
@@ -137,9 +139,8 @@ We present \texttt{MixedComplementarityProblems.jl}, an open-source, pure Julia 
 
 As \cref{fig:teaser} previews and \cref{sec:experiments} quantifies, on a
 multi-agent lane-change trajectory game representative of robotics planning problems,
-clearing a batch of parametric instances with our batched solver is about two orders of
-magnitude faster than clearing the same batch with sequential calls to \texttt{PATH}
-(\cref{sec:exp:throughput}).
+clearing a batch of parametric instances with our batched solver is roughly
+$100\times$ faster than clearing the same batch with sequential calls to \texttt{PATH}.
 
 \section{Background: Mixed Complementarity Problems}
 \label{sec:background}
@@ -183,7 +184,7 @@ multipliers $\lambda \in \mathbb{R}^{n_\lambda}$ associated with the equality co
 \end{subequations}
 
 Problem \cref{eq:primal-dual-mcp} can be converted into the form \cref{eq:mcp-box} by taking $z=(x,\lambda,\mu)$, $F = (G, H)$, $u_i = \infty$ ($\forall i$), $\ell_i = -\infty$ ($\forall i \in \{1, 2, \dots, n_x + n_\lambda\}$), and $\ell_i = 0$ ($\forall i > n_x + n_\lambda$).
-Because of the natural connection between KKT conditions (e.g., arising from trajectory optimization problems in robotics) and this \emph{primal-dual} form of the MCP, it is the only form
+Because of the natural connection between KKT conditions (e.g., arising from trajectory optimization problems in robotics) and this \emph{primal-dual} form of the MCP, it is the primary form
 \texttt{MixedComplementarityProblems.jl} exposes.
 
 \subsection{MCPs from noncooperative games}
@@ -197,10 +198,12 @@ Consider $N$ agents, where agent $i$ solves
   	\min_{x_i} \; f_i(x_i, x_{\neg i};\theta) \\
   	\text{s.t.} \quad g_i(x_i, x_{\neg i}; \theta) = 0,~ h_i(x_i,x_{\neg i};\theta) \ge 0
   \end{cases}\\
-  &\text{s.t.} \quad \; g_\mathrm{sh}(x;\theta) = 0,~ h_\mathrm{sh}(x; \theta) \ge 0,
+  &\text{s.t.} \quad \; g_\mathrm{sh}(x;\theta) = 0,~ h_\mathrm{sh}(x; \theta) \ge 0.
 \end{align}
 \end{subequations}
-subject to its own equality and inequality constraints ($g_i$ and $h_i$, respectively) and to constraints $g_\mathrm{sh}, h_\mathrm{sh}$ shared across agents
+Here, each agent $i$ must respect its own private equality and inequality
+constraints ($g_i$ and $h_i$, respectively), and also constraints
+$g_\mathrm{sh}, h_\mathrm{sh}$ which are shared across agents
 (e.g., pairwise collision avoidance).
 Each agent $i$'s decision variable is $x_i \in \mathbb{R}^{n_{x_i}}$, and $x_{\neg i}$ denotes the other agents'
 decisions so that $x= (x_i, x_{\neg i}) = (x_1,\dots,x_N)$. Writing out each agent's KKT conditions as in
@@ -211,10 +214,10 @@ unilaterally improve its own objective \cite{facchinei2003finite}.
 
 Concretely, concatenate the Lagrange multipliers corresponding to equality
 constraints as $\lambda \coloneqq
-(\lambda_1, \dots, \lambda_N, \lambda_\mathrm{sh})$, and those for inequality
-constraints as $\mu \coloneqq (\mu_1, \dots, \mu_N, \mu_\mathrm{sh})$. Then,
-private multipliers as $\lambda_\mathrm{pr}=(\lambda_1,\dots,\lambda_N)$,
-$\mu_\mathrm{priv}=(\mu_1,\dots,\mu_N)$. Each agent $i$'s Lagrangian is given by
+(\lambda_\mathrm{pr}, \lambda_\mathrm{sh})$ and those for inequality
+constraints as $\mu \coloneqq (\mu_\mathrm{pr}, \mu_\mathrm{sh})$, with
+private multipliers denoted $\lambda_\mathrm{pr} \coloneqq (\lambda_1,\dots,\lambda_N)$ and
+$\mu_\mathrm{priv} \coloneqq (\mu_1,\dots,\mu_N)$. Each agent $i$'s Lagrangian is given by %3D
 \begin{multline}
   \label{eq:lagrangian}
   \mathcal{L}_i(x, \lambda, \mu; \theta) \coloneqq f_i(x; \theta) -
@@ -256,32 +259,35 @@ with $G$ and $H$ functions of $(x, \lambda, \mu)$ and parameterized by $\theta$.
 
 \texttt{MixedComplementarityProblems.jl} implements an intentionally-simple
 primal-dual interior point method to solve problem \cref{eq:primal-dual-mcp}.
-To that end, we introduce a slack variable $z \in \mathbb{R}^{n_\mu}$ and rewrite
-\cref{eq:primal-dual-mcp} in terms of $z \ge 0$ and a homotopy parameter $\rho >
+To that end, we introduce a slack variable $w \in \mathbb{R}^{n_\mu}$ and rewrite
+\cref{eq:primal-dual-mcp} in terms of $w \ge 0$ and a homotopy parameter $\rho >
 0$:
 \begin{equation}
 \label{eq:slacked-mcp}
 K_\rho(x, \lambda, \mu, z; \theta) \coloneqq \begin{bmatrix}
   G(x, \lambda, \mu; \theta) \\
-  H(x; \theta) - z \\
-  z \odot \mu - \rho 1
+  H(x; \theta) - w \\
+  w \odot \mu - \rho 1
 \end{bmatrix} = 0.
 \end{equation}
-Note that the last row of $K_\rho$ involves the elementwise product $z \odot
-\mu$ and, consequently, the number of equations in $K_\rho$ is equal to the
-total dimension of the primal, dual, and slack variables $(x, \lambda, \mu, z)$.
+Note that the last row of $K_\rho$ involves the elementwise product $w \odot
+\mu$ and, consequently, the number of equations in $K_\rho$ is equal to
+$d \coloneqq \dim(x) + \dim(\lambda) + \dim(\mu) + \dim(w)$, the total dimension of the
+primal, dual, and slack variables---the per-instance KKT system size we return to when
+characterizing GPU-vs-CPU scaling in \cref{sec:exp:gpu}.
 
-As summarized in \cref{alg:solver}, we proceed in rounds by solving
-\cref{eq:slacked-mcp} via a regularized Newton method and decaying $\rho \to 0$ until reaching the user's defined tolerance $\|K_0\|
+Per \cref{alg:solver}, we proceed in rounds by solving
+\cref{eq:slacked-mcp} via a regularized Newton method and decaying $\rho \to 0$
+to satisfy a user-defined tolerance $\|K_0\|
 \le \bar K$.
 For a given value of $\rho$, the regularized Newton direction $\delta \coloneqq
-(\delta_x, \delta_\lambda, \delta_\mu, \delta_z)$ solves
+(\delta_x, \delta_\lambda, \delta_\mu, \delta_w)$ solves
 \begin{equation}
   \label{eq:newton}
   \left(\begin{bmatrix}
     \nabla_x G & \nabla_\lambda G & \nabla_\mu G & 0\\
     \nabla_x H & 0 & 0 & -I \\
-    0 & 0 & \mathrm{dg}(z) & \mathrm{dg}(\mu)
+    0 & 0 & \mathrm{dg}(w) & \mathrm{dg}(\mu)
   \end{bmatrix} + \epsilon I\right) \delta = -K_\rho,
 \end{equation}
 with $\epsilon \ge 0$ a regularization parameter chosen as described below, and
@@ -289,12 +295,12 @@ $\mathrm{dg}(\cdot)$ returning a square matrix with its argument on the main dia
 and all other entries zero.
 
 We implement two additional subtleties. First, on line~\ref{line:linesearch}, we conduct a
-``fraction to the boundary'' linesearch to control the rate at which $z, \mu
+``fraction to the boundary'' linesearch to control the rate at which $w, \mu
 \ge 0$ can approach $0$ (cf. \cite[\S19]{nocedal2006numerical}). At each iteration $k$, stepsizes $\alpha_k, \beta_k$ are chosen so that
 \begin{equation}
 \label{eq:linesearch}
 \begin{aligned}
-  \alpha_k &= \max\big(\alpha \in [0, 1] ~:~ z + \alpha \delta_z \ge (1 - \tau) z\big)\\
+  \alpha_k &= \max\big(\alpha \in [0, 1] ~:~ w + \alpha \delta_w \ge (1 - \tau) w\big)\\
   \beta_k &= \max\big(\beta \in [0, 1] ~:~ \mu + \beta \delta_\mu \ge (1 - \tau) \mu\big),
 \end{aligned}
 \end{equation}
@@ -307,25 +313,25 @@ parameter $\epsilon$ and the interior point homotopy parameter $\rho$ that aims
 to control subproblem conditioning.
 At the end of each inner loop (lines~\ref{line:tighten} and~\ref{line:loosen}), if the solver successfully drove $\|K_\rho\| \le
 \rho$ then we \emph{tighten} $\rho$ and $\epsilon$ at a rate dependent upon the
-number of Newton steps required to converge; conversely, if the inner loop could
-not meet the tolerance and $\|K_\rho\| > \rho$, we \emph{loosen} both $\rho$ and
+number of Newton steps required to converge; conversely, if the inner loop fails
+and $\|K_\rho\| > \rho$, we \emph{loosen} both $\rho$ and
 $\epsilon$ to improve the conditioning of the next subproblem and require a less
 precise solution.
 
 \begin{algorithm}[t]
 \DontPrintSemicolon
-\KwIn{initial iterate $(x,\lambda,\mu,z)$ with $\mu,z>0$; parameters $\theta$;
+\KwIn{initial iterate $(x,\lambda,\mu,w)$ with $\mu,w>0$; parameters $\theta$;
   initial $\rho,\epsilon > 0$; tightening/loosening rates
   $\underline\gamma,\bar\gamma\in(0,1)$; max.\ inner
   iterations $k_\mathrm{max}$; tolerance $\bar K$}
-\KwOut{$(x,\lambda,\mu,z)$ with $\|K_0(x,\lambda,\mu,z;\theta)\|\le\bar K$}
-\While{$\|K_0(x,\lambda,\mu,z;\theta)\| > \bar K$}{
+\KwOut{$(x,\lambda,\mu,w)$ with $\|K_0(x,\lambda,\mu,w)\|\le\bar K$}
+\While{$\|K_0(x,\lambda,\mu,w;\theta)\| > \bar K$}{
   $k \gets 0$\;
-  \Repeat{$\|K_\rho(x,\lambda,\mu,z;\theta)\|\le\rho$ or $k\ge k_\mathrm{max}$}{
-    assemble $K_\rho$ \cref{eq:slacked-mcp} and solve \cref{eq:newton} for the Newton direction $\delta=(\delta_x,\delta_\lambda,\delta_\mu,\delta_z)$\;
+  \Repeat{$\|K_\rho(x,\lambda,\mu,w;\theta)\|\le\rho$ or $k\ge k_\mathrm{max}$}{
+    assemble $K_\rho$ \cref{eq:slacked-mcp} and solve \cref{eq:newton} for the Newton direction $\delta=(\delta_x,\delta_\lambda,\delta_\mu,\delta_w)$\;
     compute step sizes $\alpha_k,\beta_k$ via the fraction-to-boundary rule \cref{eq:linesearch}\label{line:linesearch}\;
     $x \gets x+\alpha_k\delta_x$,\quad $\lambda\gets\lambda+\alpha_k\delta_\lambda$,\quad
-    $z\gets z+\alpha_k\delta_z$,\quad $\mu\gets\mu+\beta_k\delta_\mu$\;
+    $w\gets w+\alpha_k\delta_w$,\quad $\mu\gets\mu+\beta_k\delta_\mu$\;
     $k \gets k+1$\;
   }
   \eIf{$\|K_\rho(x,\lambda,\mu,z;\theta)\|\le\rho$}{
@@ -347,20 +353,22 @@ precise solution.
 \section{Batched and GPU-Parallel Solving}
 \label{sec:batched}
 
-Many applications require solving not one but a whole \emph{batch} of MCPs that share
+Many applications require solving entire \emph{batches} of MCPs that share
 the same symbolic structure $(G, H)$ and differ only in their parameter vector
-$\theta$---for example, if we wished to solve the trajectory game of
-\cref{fig:teaser} from many initial conditions. Rather than naively deploying
+$\theta$---for example,
+\cref{fig:teaser}(a) showcases a batch of trajectory games with varying initial
+conditions for the two agents. Rather than naively deploying
 \cref{alg:solver} on each instance in series, we reuse the shared symbolic
 structure and exploit hardware-level parallelism (both CPU multithreading and
 GPU) to solve an entire batch of $B$ parametrically-related instances in a single call.
 
 \contentbox{A batch of lane-change games}{
-  Sampling $B$ initial conditions, lane preferences, or collision radii of
-  \cref{fig:teaser}(a) yields $B$ instances of the same symbolic game, differing only
-  in $\theta$; stacking them column-wise into $\Theta \in \mathbb{R}^{n_\theta \times
+  Sampling $B$ initial conditions (or lane preferences, etc.)
+  as in
+  \cref{fig:teaser}(a) yields $B$ instances of the same game, differing only
+  in $\theta$. Stacking them column-wise into $\Theta \in \mathbb{R}^{n_\theta \times
     B}$ and calling \cref{alg:batched} solves the entire batch simultaneously,
-  e.g., to evaluate a planner across a distribution of scenarios
+  e.g., to plan across a distribution of scenarios
   \cite{li2023scenario} rather than one scenario at a time.
 }
 
@@ -371,7 +379,7 @@ GPU) to solve an entire batch of $B$ parametrically-related instances in a singl
 For convenience, we stack the batch's parameter vectors column-wise into $\Theta \in \mathbb{R}^{n_\theta
 \times B}$, so that column $b$ is instance $b$'s parameter vector $\theta_b$;
 likewise, we
-stack each instance's iterate into $X, \Lambda, M, Z \in \mathbb{R}^{(\cdot) \times B}$.
+stack each instance's iterate into $X, \Lambda, M, W \in \mathbb{R}^{(\cdot) \times B}$.
 \cref{alg:solver} is then implemented \emph{once}, against a small set of verbs---\texttt{residual!}, \texttt{jacobian!}, \texttt{factorize!}, \texttt{ldiv!}---that
 consume and return plain $(\cdot) \times B$ arrays. The numeric representation of the
 batched Jacobian $\nabla K_\rho$ and its factorization never leave these four verbs: they
@@ -387,7 +395,7 @@ array containing only the structurally nonzero elements of $\nabla K_\rho$.
 
 Three changes distinguish the batched loop in \cref{alg:batched} from \cref{alg:solver}. First, the homotopy
 and regularization parameters $\rho, \epsilon$, and the convergence check
-$\|K_\rho\|$, all become length-$B$ vectors, one per instance, so that harder
+$\|K_\rho\|$, all become length-$B$, one per instance, so that harder
 problem instances
 can iterate longer without penalizing easier instances in the same batch.
 
@@ -405,13 +413,13 @@ a batch composed of many easier instances.
 
 \begin{algorithm}[t]
 \DontPrintSemicolon
-\KwIn{batch of $B$ instances $(x_b,\lambda_b,\mu_b,z_b;\theta_b)$ as in
+\KwIn{batch of $B$ instances $(x_b,\lambda_b,\mu_b,w_b;\theta_b)$ as in
   \cref{alg:solver}, each with its own $\rho_b,\epsilon_b$; tightening/loosening
   rates $\underline\gamma,\bar\gamma$; max.\ inner/outer iterations
   $k_\mathrm{max}, T_\mathrm{max}$; max.\ consecutive stalled outer rounds
   $T_\mathrm{stall}$; tolerance $\bar K$}
 \KwOut{status$_b \in \{\texttt{solved}, \texttt{failed}\}$ and
-  $(x_b,\lambda_b,\mu_b,z_b)$ for $b = 1,\dots,B$}
+  $(x_b,\lambda_b,\mu_b,w_b)$ for $b = 1,\dots,B$}
 status$_b \gets \texttt{active}$, $\mathrm{stall}_b \gets 0$ \quad $\forall b$\;
 $t \gets 0$\;
 \While{$t < T_\mathrm{max}$ and status$_b = \texttt{active}$ for some $b$}{
@@ -438,7 +446,7 @@ $t \gets 0$\;
   }
   $t \gets t + 1$\;
 }
-\Return{$\{\mathrm{status}_b, (x_b,\lambda_b,\mu_b,z_b)\}_{b=1}^B$}
+\Return{$\{\mathrm{status}_b, (x_b,\lambda_b,\mu_b,w_b)\}_{b=1}^B$}
 \caption{Batched primal-dual interior point}
 \label{alg:batched}
 \end{algorithm}
@@ -465,7 +473,7 @@ factorization. Consequently, line~\ref{line:batched-solve}'s active-instance
 restriction is accepted on GPU only to maintain a uniform verb signature across backends, but
 is a no-op there: every outer round factors and solves \emph{all} $B$ instances,
 converged and failed ones included, and only their zero stepsize keeps the frozen
-instances' $(x_b,\lambda_b,\mu_b,z_b)$ unchanged. This imposes a real cost on
+instances' $(x_b,\lambda_b,\mu_b,w_b)$ unchanged. This imposes a real cost on
 GPU---one paid in exchange for offloading the whole batch to a single, highly
 parallel factorization---and it is the reason $T_\mathrm{stall}$ matters more on GPU
 than on CPU.
@@ -481,54 +489,53 @@ LU factorization.
 \section{Differentiable Solving}
 \label{sec:differentiable}
 
-Embedding an MCP solve---and the games it encodes---as a differentiable layer inside a
-learned pipeline requires differentiating the solution with respect to problem
-parameters~\cite{amos2017optnet}. Because \texttt{MixedComplementarityProblems.jl} is a
-pure-Julia interior point method, this capability follows directly from the implicit
+Embedding an MCP solve---and the games it can encode---as a differentiable layer inside a
+machine learning pipeline requires differentiating the solution with respect to problem
+parameters~\cite{amos2017optnet}. Because
+\texttt{MixedComplementarityProblems.jl} implements a smooth, interior point method, this capability follows directly from the implicit
 function theorem applied to \cref{eq:primal-dual-mcp}, at no cost to the solver design
 described above.
 
-Write $\zeta \coloneqq (x, \lambda, \mu, z)$ for the primal-dual-slack iterate. A solution
-satisfies $K_0(\zeta; \theta) = 0$ (\cref{eq:slacked-mcp} in the limit $\rho \to 0$); wherever
-$\nabla_\zeta K_0$ is nonsingular, differentiating this identity through $\theta$ gives
+Let $z \coloneqq (x, \lambda, \mu, w)$ for the primal-dual-slack iterate. A solution
+satisfies $K_0(z; \theta) = 0$ (i.e., \cref{eq:slacked-mcp} in the limit $\rho \to 0$); wherever
+$\nabla_z K_0$ is nonsingular, differentiating with respect to $\theta$,
+applying the chain rule, and rearranging gives
 \begin{equation}
   \label{eq:sensitivity}
-  \frac{\partial \zeta}{\partial \theta} = -\left(\nabla_\zeta K_0\right)^{-1} \nabla_\theta K_0.
+  \frac{\partial z}{\partial \theta} = -\left(\nabla_z K_0\right)^{-1} \nabla_\theta K_0.
 \end{equation}
 Crucially, $\nabla_\zeta K_0$ at a converged iterate is exactly the (unregularized) Newton
 Jacobian of \cref{eq:newton} already assembled and factored at the last step of
 \cref{alg:solver}. Evaluating \cref{eq:sensitivity} therefore costs one additional
 $n_\theta$-column \texttt{ldiv!} against that same factorization---not a new factorization---and
 extends unchanged to the batched setting, where it becomes a per-instance multi-right-hand-side
-solve of shape $(\cdot \times n_\theta \times B)$ against each instance's existing factorization.
+solve of shape $(\cdot) \times n_\theta \times B$ against each instance's existing factorization.
 
-\Cref{eq:sensitivity} supports both directions of automatic differentiation. Forward-mode
-dispatches on \texttt{ForwardDiff.Dual}-typed $\theta$: the solver solves once at the
-underlying real value and propagates dual perturbations through $\partial \zeta/\partial
-\theta$. Reverse-mode is exposed as a \texttt{ChainRulesCore.rrule}, whose pullback contracts a
-downstream cotangent against $\partial \zeta/\partial \theta$ via a single
-vector--Jacobian product, so it composes with any Julia reverse-mode AD system (e.g.,
-Zygote). Both are implemented for the unbatched and batched solvers alike. Because
+Equation \cref{eq:sensitivity} supports both forward- and reverse-mode automatic differentiation. Forward-mode
+autodifferentiation dispatches on dual number-typed $\theta$: the solver solves once at the
+underlying real value and propagates dual perturbations through $\nicefrac{\partial z}{\partial
+\theta}$. Reverse-mode autodifferentiation is implemented via a single
+Jacobian-vector product. Both are implemented for the unbatched and batched
+solvers alike, and because
 $\nabla_\theta K_0$ is only needed for \cref{eq:sensitivity}, its symbolic construction is
-opt-in via \texttt{compute\_sensitivities\;=\;true} at MCP-construction time---mirroring
-\texttt{compute\_kernel\_evaluators} in \cref{sec:batched}---so users who do not need
+an opt-in user choice during MCP construction, so users who do not need
 gradients pay no additional compile- or run-time cost.
 
-As with any KKT-based sensitivity, \cref{eq:sensitivity} presumes the active set is locally
-stable near $\theta$: where an inequality constraint is exactly active, the true solution map
-is only Lipschitz, not differentiable, and $\partial \zeta/\partial \theta$ is a one-sided
-approximation. This is a property of the KKT system itself, not a limitation particular to
-our solver.
+As with any KKT-based sensitivity, \cref{eq:sensitivity} presumes the set of
+active constraints for each problem is constant near $\theta$: where an
+inequality constraint is only weakly active, the true solution map
+is only Lipschitz, not differentiable, and $\nicefrac{\partial z}{\partial \theta}$ is a one-sided
+approximation. This is a property of the KKT system itself, not a solver-specific limitation.
 
 \contentbox{Differentiating the lane-change game}{
   We validate \cref{eq:sensitivity} against central finite differences on the lane-change
   game of \cref{fig:teaser}(a). Over $20$ random instances converging to $\|K_0\| \le
   10^{-4}$, differentiating a scalar function of the solution (the primal and dual
-  variables' squared norm) with respect to $\theta$ via \texttt{ForwardDiff} agrees with a
+  variables' squared norm) with respect to $\theta$ via forward-mode
+  autodifferentiation (using \texttt{ForwardDiff.jl} \cite{RevelsLubinPapamarkou2016}) agrees with a
   central-difference approximation (step $10^{-6}$) to a median relative error, in the
   gradient's norm, of $6 \times 10^{-9}$, and no worse than $0.1\%$ across all $20$
-  instances---consistent with finite-difference truncation error rather than any
-  discrepancy in \cref{eq:sensitivity} itself.
+  instances.
 }
 
 \section{Experiments}
@@ -541,7 +548,7 @@ answer four questions:
 \begin{enumerate}
   \item \textbf{Single-instance parity.} Solving one problem at a time, does our
   interior point method match \texttt{PATH}'s reliability, and how does its per-solve
-  wall-clock compare? (\cref{sec:exp:single})
+  wall-clock timing compare? (\cref{sec:exp:single})
   \item \textbf{Batched throughput.} When a whole batch must be cleared, how much faster
   is a single batched solve than sequential \texttt{PATH} calls? (\cref{sec:exp:throughput})
   \item \textbf{CPU thread scaling.} How does batched throughput scale with the number of
@@ -564,7 +571,7 @@ system sizes and, because the random instances are not guaranteed to be feasible
 mix of solvable and infeasible instances. The second family is the lane-change
 \emph{trajectory game} of \cref{sec:background:games} (the running example), a two-player
 generalized Nash equilibrium problem over a planning horizon $T \in \mathbb{N}$; each sampled instance
-randomizes the players' initial states and lane preferences, so the batch spans a
+randomizes the players' initial states, so the batch spans a
 distribution of scenarios exactly as a scenario-based planner would encounter
 \cite{li2023scenario}. The horizon $T$ controls the per-instance KKT dimension.
 
@@ -578,28 +585,23 @@ compare the batched interior point solver (\cref{alg:batched}) in both its CPU
 (multithreaded) and GPU (\texttt{cuDSS}) configurations.
 
 \paragraph{Hardware and software}
-All experiments run on a single workstation with an AMD Ryzen 9 7950X CPU (16 physical
+All experiments use Julia 1.12.6 and run on a single workstation with an AMD Ryzen 9 7950X CPU (16 physical
 cores / 32 hardware threads) and 126~GB of RAM; GPU experiments use an NVIDIA GeForce
-RTX~4090 (24~GB). We use Julia 1.12.6, run the CPU-multithreaded solver with 32 threads,
-and access \texttt{PATH} through \texttt{PATHSolver.jl}. All timings are taken after a
-separate warm-up solve to exclude compilation. Per-solve times (\cref{tab:single}) are
+RTX~4090 (24~GB). All timings are taken after a
+separate warm-up solve to exclude compilation. Per-solve times (cf.  \cref{tab:single}) are
 summarized as mean~$\pm$~standard deviation over the $B$ instances of a batch; batched
-throughput (\cref{tab:throughput}) is the total wall-clock to clear the batch, which varies
+throughput (cf. \cref{tab:throughput}) is the total wall-clock to clear the batch, which varies
 modestly across repetitions (standard deviation under about $20\%$). Unless noted, we use a
 convergence tolerance of $\bar K = 10^{-4}$ and report each batch's \emph{solved fraction}
 (instances reaching $\|K_0\| \le \bar K$) and its total wall-clock time to clear all $B$
-instances. For a fair comparison, \texttt{PATH} is held to the same convergence tolerance as
-our solver (its \texttt{convergence\_tolerance} option set to $10^{-4}$, rather than its
-tighter default of $10^{-6}$); in practice this makes a negligible difference to \texttt{PATH}'s
-timings, as its quadratic local convergence drives the residual well below either threshold in
-the same iteration.
+instances. For a fair comparison, \texttt{PATH} is held to the same convergence tolerance.
 
 \subsection{Single-instance reliability and speed}
 \label{sec:exp:single}
 
 Before batching, we evaluate \cref{alg:solver} against \texttt{PATH} on individual
 (unbatched) problems. \cref{tab:single} reports, for each problem family, the fraction of
-instances each solver converges on and its per-solve wall-clock, over $1024$ random
+instances each solver converges on and its per-solve wall-clock timing, over $1024$ random
 instances (QP: $n_x = 32$, $n_\mu = 16$; trajectory game: $T = 10$).
 Two results stand out. First, \cref{alg:solver} is as reliable as \texttt{PATH}:
 it converges on $431$ of the $1024$ QP instances to \texttt{PATH}'s $437$ (the remainder
@@ -613,8 +615,7 @@ generated instances are infeasible, and \cref{alg:solver} iterates each to its r
 before declaring failure, a heavy tail that inflates its own mean well above its median
 (hence its large standard deviation in \cref{tab:single}). \texttt{PATH}'s solve times are
 similarly bimodal, though its particular mean--median relationship is sensitive to exactly
-how and when it detects infeasibility. The batched results below then add a further,
-orthogonal speedup due to parallelism.
+how and when it detects infeasibility.
 
 The sparse linear solver used inside \cref{alg:solver} matters substantially here.
 \cref{alg:solver} refactorizes the regularized Jacobian of \cref{eq:newton} at every Newton
@@ -623,8 +624,8 @@ step, always with the same sparsity pattern. \texttt{KLU}
 standard direct solvers for sparse linear systems; \texttt{KLU}'s in-place refactorization,
 which reuses the symbolic analysis and pivot ordering across steps, is $4$--$6\times$ faster
 per solve than \texttt{UMFPACK} on these repeatedly refactored systems, at identical
-reliability (\cref{tab:single}). We therefore adopt \texttt{KLU} by default; it is also the
-factorization the batched CPU backend uses (\cref{sec:batched}).
+reliability (cf. \cref{tab:single}). We therefore adopt \texttt{KLU} by default; it is also the
+factorization the batched CPU backend uses (cf. \cref{sec:batched}).
 
 \begin{table}[t]
   \centering
@@ -660,22 +661,21 @@ reports the total wall-clock to solve a batch of $B = 1024$ instances of each fa
 three ways: sequential \texttt{PATH} calls, sequential unbatched \cref{alg:solver}
 calls, and via a single \cref{alg:batched} call across $32$ CPU threads.
 As previewed in \cref{fig:teaser}(b), on the trajectory game the CPU-multithreaded batched
-solver clears the batch roughly $110\times$ faster than sequential \texttt{PATH}; even the
-\emph{unbatched} solver is already $\sim\!48\times$ faster than \texttt{PATH} here, because
-its per-solve cost is so much lower (\cref{tab:single}), and batching then adds a further
+solver clears the batch roughly $100\times$ faster than sequential \texttt{PATH}; even the
+\emph{unbatched} solver is already $\sim\!50\times$ faster than \texttt{PATH} here, because
+its per-solve cost is so much lower (cf. \cref{tab:single}), and batching then adds a further
 $\sim\!2\times$ on top.
 
-On the QP the batched solver is $6.6\times$ faster than \texttt{PATH}, even though the
+On the QP the batched solver is $6.8\times$ faster than \texttt{PATH}, even though the
 \emph{sequential} unbatched solver is here slightly slower than \texttt{PATH} in total
-(\cref{tab:throughput}). This is a consequence of the infeasible instances. Roughly half of
+(cf. \cref{tab:throughput}). This is a consequence of the infeasible instances. Roughly half of
 the random QPs are infeasible, and each such instance runs all the way to
 \cref{alg:solver}'s outer-iteration limit before it is declared a failure; these few
 expensive solves dominate the \emph{sequential} total, even though the typical (feasible)
-solve is fast (\cref{tab:single}). The batched solver absorbs this tail: the infeasible
-instances are factored and stepped in parallel with the rest, and the per-instance stall
-detection of \cref{alg:batched} freezes them early, so they no longer gate the total. The
-batched solver therefore clears the whole batch $6.6\times$ faster than \texttt{PATH}
-despite the tail.
+solve is fast, per \cref{tab:single}. The batched solver absorbs this tail, with the per-instance stall
+detection of \cref{alg:batched} freezing them early so that they no longer gate
+the total runtime on CPU. The
+batched solver therefore clears the whole batch $6.8\times$ faster than \texttt{PATH}.
 
 The batched speedup comes from two compounding sources: sharing the symbolic
 $(G, H)$ structure across the batch (assembled and sparsity-analyzed once), and
@@ -709,6 +709,31 @@ for threading to absorb.
   \label{tab:throughput}
 \end{table}
 
+\begin{figure}[bp!]
+  \centering
+  \includegraphics[width=0.9\columnwidth]{figures/thread_scaling.pdf}
+  \caption{Batched-solver throughput vs.\ CPU thread count at a fixed batch size of $N = 1024$.
+    Throughput rises sublinearly with the thread count, with the gains concentrated in the first
+    few threads; both problem families plateau around physical-core saturation, with no further
+    systematic gain from simultaneous multithreading.}
+  \label{fig:threadscaling}
+\end{figure}
+
+\begin{figure*}[tp!]
+  \centering
+  \includegraphics[width=0.85\textwidth]{figures/gpu_vs_cpu.pdf}
+  \caption{GPU (\texttt{cuDSS}) vs.\ CPU batched throughput. The GPU pulls ahead only for
+    large, dense per-instance systems (the QP at large $n_x$ or large $B$); on the sparse
+    trajectory-game systems the multithreaded CPU is faster at every horizon, because its
+    active-set skip factorizes only the still-active instances each step while \texttt{cuDSS}
+    always processes the whole batch. Shaded bands show a conservative envelope,
+    $[\min(\text{CPU})/\max(\text{GPU}), \max(\text{CPU})/\min(\text{GPU})]$, over $5$--$30$
+    repeated trials per point.}
+  \label{fig:gpu}
+\end{figure*}
+
+
+
 \subsection{CPU thread scaling}
 \label{sec:exp:threads}
 
@@ -728,40 +753,20 @@ is roughly $60\%$ infeasible-by-construction instances that are more expensive t
 both cases the batched solver extracts substantial parallel throughput from commodity multicore
 hardware with no device-specific code.
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.9\columnwidth]{figures/thread_scaling.pdf}
-  \caption{Batched-solver throughput vs.\ CPU thread count at a fixed batch size of $N = 1024$.
-  Throughput rises sublinearly with the thread count, with the gains concentrated in the first
-  few threads; both problem families plateau around physical-core saturation, with no further
-  systematic gain from simultaneous multithreading.}
-  \label{fig:threadscaling}
-\end{figure}
-
 \subsection{GPU vs.\ CPU: a regime-dependent crossover}
 \label{sec:exp:gpu}
-
-\begin{figure*}[tp!]
-  \centering
-  \includegraphics[width=0.85\textwidth]{figures/gpu_vs_cpu.pdf}
-  ;  \caption{GPU (\texttt{cuDSS}) vs.\ CPU batched throughput. The GPU pulls ahead only for
-    large, dense per-instance systems (the QP at large $n_x$ or large $B$); on the sparse
-    trajectory-game systems the multithreaded CPU is faster at every horizon, because its
-    active-set skip factorizes only the still-active instances each step while \texttt{cuDSS}
-    always processes the whole batch.}
-  \label{fig:gpu}
-\end{figure*}
 
 
 
 Whether the GPU backend beats the multithreaded CPU depends on the problem regime.
 Because both backends run the same solver loop behind the verb set of \cref{sec:batched},
 this comparison isolates the linear-algebra backend. We sweep two axes independently
-(\cref{fig:gpu}): the batch size $B$ at fixed per-instance size (left), and the
+in \cref{fig:gpu}: the batch size $B$ at fixed per-instance size (left), and the
 per-instance size at fixed $B$ (right)---controlled by the number of primal variables
 $n_x$ in the QP and by the horizon $T$ in the trajectory game.
 
-GPU outperforms batched CPU only once each per-instance KKT system is both large \emph{and} dense.
+GPU outperforms batched CPU only once each per-instance KKT system is both large
+\emph{and} sufficiently dense.
 On the QP, the GPU backend pulls ahead as the batch grows larger (up to $1.8\times$ faster than the $32$-thread
 CPU at $B = 4096$) and, more strongly, as the per-instance system grows: at $n_x = 128$ the
 GPU is roughly $3\times$ faster. On the trajectory game, by contrast, the CPU is faster at
@@ -814,18 +819,19 @@ point loop runs unmodified across both CPU and GPU backends.
 
 That abstraction also lets us characterize \emph{when} each device is the right choice, and the
 answer is regime-dependent (cf. \cref{sec:exp:gpu}). The multithreaded CPU is the better default for
-the sparse, moderate-dimension KKT systems typical of receding-horizon trajectory games: its
-active-set skip factorizes only the still-active instances each Newton step, whereas \texttt{cuDSS}
+the extremely sparse KKT systems typical of receding-horizon trajectory games: its
+active instance logic factorizes only the still-active instances each Newton step, whereas \texttt{cuDSS}
 always processes the whole batch. The GPU outperforms only once each per-instance system is both
-large and dense enough for its batched factorization to win the per-step comparison outright---the
-large-$n_x$ QP, or very large batches. Future work should close this gap by
-making the batched factorization aware of the set of active instances, e.g.\ compacting the
+large and dense enough for its batched factorization to win the per-step
+comparison outright---e.g., the
+large-$n_x$ QP. Future work should close this gap by
+making the GPU-batched factorization aware of the set of active instances, e.g.\ compacting the
 active instances before each \texttt{cuDSS} call so that GPU per-step cost, like the CPU's, falls
 as the number of active instances shrinks; cf. \cite{viljoen2026scaling}, which
 implements a similar design (but for nonlinear programs rather than mixed
 complementarity problems).
 
-Several limitations temper these conclusions and motivate further work. Our reliability and timing
+Several other limitations temper these conclusions and motivate further work. Our reliability and timing
 comparisons use two problem families---randomly generated QPs and a single lane-change trajectory
 game---and, on the trajectory game, the fraction of solved instances declines at long horizons even with warm
 starting (cf. \cref{sec:exp:gpu}). A broader benchmark suite would improve the
