@@ -7,6 +7,16 @@ This package provides an easily-customizable interface for expressing mixed comp
 
 As of `v0.2.2`, `MixedComplementarityProblems.jl` implements CPU multithreading and GPU-parallelized solvers as well, enabled via `KernelAbstractions.jl`. Check out the benchmarking README [here](https://github.com/CLeARoboticsLab/MixedComplementarityProblems.jl/blob/main/benchmark/README.md) for more details.
 
+If you find this project useful in your work, please cite the accompanying [paper](https://arxiv.org/pdf/2608.00959):
+```
+@article{fridovich2026mcps,
+    title={MixedComplementarityProblems.jl: A Fast, Batched, Open-Source Interior Point Solver for Mixed Complementarity Problems},
+    author={David Fridovich-Keil},
+    year={2026},
+    journal={arXiv preprint arXiv:2608.00959}
+}
+```
+
 ## What are MCPs?
 
 Mixed complementarity problems (MCPs) are a class of mathematical program, and they arise in a wide variety of application problems. In particular, one way they can arise is via the KKT conditions of nonlinear programs and noncooperative games. This package provides a utility for constructing MCPs from (parameterized) games, cf. `src/game.jl` for further details. To see the connection between KKT conditions and MCPs, read the next section.
