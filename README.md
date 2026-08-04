@@ -7,6 +7,16 @@ This package provides an easily-customizable interface for expressing mixed comp
 
 As of `v0.2.2`, `MixedComplementarityProblems.jl` implements CPU multithreading and GPU-parallelized solvers as well, enabled via `KernelAbstractions.jl`. Check out the benchmarking README [here](https://github.com/CLeARoboticsLab/MixedComplementarityProblems.jl/blob/main/benchmark/README.md) for more details.
 
+If you find this project useful in your work, please cite the accompanying [paper](https://arxiv.org/pdf/2608.00959):
+```
+@article{fridovich2026mcps,
+    title={MixedComplementarityProblems.jl: A Fast, Batched, Open-Source Interior Point Solver for Mixed Complementarity Problems},
+    author={David Fridovich-Keil},
+    year={2026},
+    journal={arXiv preprint arXiv:2608.00959}
+}
+```
+
 ## What are MCPs?
 
 Mixed complementarity problems (MCPs) are a class of mathematical program, and they arise in a wide variety of application problems. In particular, one way they can arise is via the KKT conditions of nonlinear programs and noncooperative games. This package provides a utility for constructing MCPs from (parameterized) games, cf. `src/game.jl` for further details. To see the connection between KKT conditions and MCPs, read the next section.
@@ -214,12 +224,17 @@ The returned `x`, `y`, `s` live on the GPU (as `CuArray`s); bring them back with
 > pattern the benchmarks use. `Adapt` is not a dependency of this package, so you would need
 > to add it to your own project (`] add Adapt`).
 
-> **Performance status (as of `v0.2.3`).** GPU now beats a many-threaded CPU run by a
-> consistent 2.5-2.8x on large-enough batched problems (e.g. the trajectory game once
-> `horizon ≳ 30`), though CPU remains faster or roughly at parity for smaller
-> per-instance problems — both handily beat PATH regardless. See the [benchmarking
+> **Performance status.** Both batched backends clear a batch far faster than sequential
+> `PATH` (the trajectory game runs ~60–90× faster on the multithreaded CPU, ~20–55× on the
+> GPU). Between the two backends the story is regime-dependent: the GPU wins end-to-end only
+> on large *dense* per-instance systems (e.g. randomly generated QPs with ≳128 primal
+> variables, 2–3×) or large batches of them, while the **CPU is faster on the trajectory
+> game** at all tested horizons. The GPU's batched sparse factorization does become cheaper
+> *per instance* than threaded KLU as the per-instance system grows, but the CPU's active-set
+> skip — it factorizes only the still-active instances each Newton step, whereas cuDSS always
+> processes the whole batch — keeps the CPU ahead end-to-end on the game. See the [benchmarking
 > README](https://github.com/CLeARoboticsLab/MixedComplementarityProblems.jl/blob/main/benchmark/README.md)
-> and PRs #54/#55 for the full breakdown and up-to-date numbers.
+> for the full breakdown and numbers.
 
 ## A fancier demo
 

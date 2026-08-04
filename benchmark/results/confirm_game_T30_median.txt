@@ -1,0 +1,8 @@
+=== game T=30 N=1024  warm=false  (median-of-5) ===
+  CPU: med=5.86s all=[6.166, 6.091, 5.86, 5.68, 5.612] solved=172
+  GPU: med=7.06s all=[7.06, 7.052, 8.015, 7.418, 6.976] solved=171
+  GPU/CPU=1.2 (>1 => GPU slower)
+=== game T=30 N=1024  warm=true  (median-of-5) ===
+  CPU: med=4.537s all=[4.763, 4.346, 4.799, 4.312, 4.537] solved=945
+  GPU: med=7.897s all=[7.897, 6.394, 6.968, 10.127, 7.9] solved=948
+  GPU/CPU=1.74 (>1 => GPU slower)

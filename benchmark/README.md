@@ -115,11 +115,17 @@ julia> data = problem_size_scaling_benchmark();
 julia> problem_size_scaling_summary(data)
 ```
 
-**Current status (RTX 4090, as of 2026-07-04): GPU beats 32 CPU threads by a consistent
-2.5-2.8x on the trajectory game once the per-instance problem is large enough (`horizon
-≳ 30`, KKT dimension `d ≳ 2000`); below that, and for small dense QPs at small batch
-sizes, CPU is still faster or roughly at parity.** The headline number depends heavily on
-*which* regime you're in — see the breakdown below rather than quoting a single ratio.
+**Current status (RTX 4090, 32 threads, updated 2026-07-30): the CPU is faster than the GPU
+end-to-end on the trajectory game at every tested horizon; the GPU wins end-to-end only on
+large *dense* per-instance systems (≳128-primal QPs, 2–3×) or large batches of them.** Both
+batched backends clear a batch far faster than sequential `PATH` (game: CPU ~60–90×, GPU
+~20–55×). Raw data and analysis scripts are in [`benchmark/results/`](../results/).
+
+> **Correction.** An earlier version of this section (and PRs #54/#55) claimed the GPU *beats*
+> the CPU 2.5–2.8× on the game. That number was the GPU/CPU wall-clock *ratio* with the GPU in
+> the numerator — i.e. the GPU is ~2.5× **slower** — mislabeled as GPU-favorable. Re-measured
+> here (median-of-N), the raw ratios reproduce, but the direction is the opposite of the old
+> headline.
 
 - **cuDSS tuning:** `factorization_alg = "algo1"` (set manually in
   `ext/MixedComplementarityProblemsCUDSSExt.jl`, since `LinearAlgebra.lu()`'s convenience
@@ -128,31 +134,27 @@ sizes, CPU is still faster or roughly at parity.** The headline number depends h
   `algo2`-`algo5` are unsupported or slower; `reordering_alg`/`use_superpanels` don't help.
 - **Stall detection** (`max_stall_rounds` in `src/batched_solver.jl`) cut wall-clock
   2.7-7x on both devices by ending instances that neither converge nor diverge instead of
-  dragging every solve to `max_outer_iters` — necessary groundwork, but on its own it
-  *shrank* GPU's apparent advantage rather than growing it (GPU was previously winning
-  partly by handling wasted iterations better, not via a genuine linear-algebra edge).
-- **Why GPU wins at larger `horizon`:** raw per-instance `jacobian!+factorize!` cost
-  crosses over in GPU's favor right around `d ≈ 3500` (`horizon ≈ 50`) — confirmed by
-  isolated, apples-to-apples timing at fixed batch size, independent of solved fraction
-  or iteration count. `outer_iters` stays flat (9-16) across `horizon = 10..100`, so this
-  is **not** explained by `BatchedInteriorPoint`'s CPU-only active-set skip (which would,
-  if anything, favor CPU *more* as harder instances drop out early) — it's cuDSS's batched
-  factorization getting relatively cheaper per instance as the matrix grows, amortizing
-  its kernel-launch/occupancy overhead better than CPU's per-thread KLU factorization.
-- **Trajectory game, with the sampling/warm-start fix above** (`N = 1024`, `height = 50`):
-  GPU/CPU wall-clock ratio is 2.68x (`horizon=30`), 2.50x (`horizon=50`), 2.48x
-  (`horizon=70`), 2.81x (`horizon=100`) — consistently GPU-favorable. Solved fraction is
-  92% (`horizon=30`), 57% (`horizon=50`), 34-36% (`horizon=70`), 23-25% (`horizon=100`) —
-  a large improvement over the pre-fix collapse (as low as 0% at `horizon=100`), but still
-  short of a "realistic, high-confidence" benchmark at `horizon ≳ 50`; further tuning
-  (larger `lead_offset`/`lead_vy_boost`, or a genuinely better warm start) is still open.
-- At `horizon ≤ 20` (small `d`), CPU remains faster (GPU 2-2.5x slower) — GPU only pulls
-  ahead once there's enough per-instance work to amortize its overhead.
-- QP (small, dense, `num_primals = 32, num_inequalities = 16`): GPU/CPU ratio close to
-  parity (0.5-1.4x) across batch sizes; problem-size sweep (32/64/128 primals) is
-  non-monotonic (GPU wins at 128 primals, up to 2.9x, but loses at 64, 0.6-0.8x) —
-  confounded by the random QP generator's solved-fraction changing sharply with
-  `num_primals` (41% → 96% → 100%), not yet a clean isolated comparison.
-- `num_samples = 16384`+ currently OOMs for the trajectory game with an unexplained low
-  reported memory usage (~10%) at failure — not yet root-caused; dropped from the sweep
-  for now.
+  dragging every solve to `max_outer_iters`.
+- **The GPU factorization kernel *does* cross over — but end-to-end the CPU still wins.**
+  Isolated per-call timing (`percall_timing.csv`, all instances active) shows the GPU's
+  `jacobian!+factorize!` crossing over CPU's around `d ≈ 2500` (jac+fac GPU/CPU 1.92× at
+  `d=700` → 0.72× at `d=4900`) and `ldiv!` crossing even earlier (~`d≈1800`). But that
+  per-call number assumes the *whole* batch is factorized every step, which only holds on the
+  first Newton iteration. The real driver of end-to-end cost is `BatchedInteriorPoint`'s
+  **active-set skip**: on CPU each Newton step factorizes only the still-active instances
+  (cost ∝ active count), while cuDSS always factorizes the whole batch (flat cost — `active`
+  is a no-op on GPU). At `d = 3500` (`active_fraction_T50.csv`) the `jac+fac` GPU/CPU ratio
+  goes from 0.77× with all 1024 active to 8.1× with only 32 active. Since a real solve's active
+  set collapses fast as instances sub-converge, the CPU spends most of the solve in the regime
+  where it dominates. (This reverses the earlier claim here that the active-set skip was *not*
+  the explanation.)
+- **Trajectory game, end-to-end** (`N = 1024`, warm, median-of-5): `horizon=30` CPU 4.15s vs
+  GPU 8.01s (GPU 1.93× slower); `horizon=50` CPU 12.7s vs GPU 16.3s. Solved fraction (warm) is
+  93% (`horizon=30`), 57% (`horizon=50`) — matching earlier runs; cold-start collapses it
+  (≈17% at `horizon=30`), so cold high-horizon GPU/CPU ratios compare two mostly-failing
+  backends and aren't meaningful. GPU timings are also higher-variance at large horizon.
+- **QP** (`num_primals=32, num_inequalities=16`): the GPU pulls ahead as the batch grows
+  (GPU/CPU ~0.6× at `N=4096`, i.e. GPU ~1.7× faster), while the CPU is faster at small batch
+  sizes. Problem-size sweep (32/64/128 primals) is non-monotonic — GPU wins clearly at 128
+  primals (2–3×) but loses at 64 — confounded by the QP generator's solved fraction changing
+  sharply with `num_primals` (41% → 96% → 100%); not a clean isolated comparison.

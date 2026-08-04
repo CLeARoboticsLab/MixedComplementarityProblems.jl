@@ -1,0 +1,8 @@
+=== Table I summary (N=1024 per problem) ===
+  qp    path       : solved=437/1024  mean=3.931ms  median=4.124ms  std=3.61ms
+  qp    ip_umfpack : solved=431/1024  mean=17.697ms  median=2.49ms  std=19.594ms
+  qp    ip_klu     : solved=431/1024  mean=4.666ms  median=0.579ms  std=6.317ms
+  game  path       : solved=996/1024  mean=45.543ms  median=41.848ms  std=22.375ms
+  game  ip_umfpack : solved=1024/1024  mean=5.459ms  median=4.426ms  std=4.426ms
+  game  ip_klu     : solved=1024/1024  mean=0.895ms  median=0.752ms  std=0.513ms
+=== TABLE1 DONE ===

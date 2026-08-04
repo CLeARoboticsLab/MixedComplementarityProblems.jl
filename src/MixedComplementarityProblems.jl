@@ -4,7 +4,8 @@ using SparseArrays: SparseArrays
 using LinearAlgebra: LinearAlgebra, I, norm, eigvals
 using BlockArrays: BlockArray, blocklengths, blocks
 using SymbolicTracingUtils: SymbolicTracingUtils as SymbolicTracingUtils
-using LinearSolve: LinearProblem, init, solve!, KrylovJL_GMRES, UMFPACKFactorization
+using LinearSolve:
+    LinearProblem, init, solve!, KrylovJL_GMRES, UMFPACKFactorization, KLUFactorization
 using SciMLBase: SciMLBase
 using KernelAbstractions: KernelAbstractions, @kernel, @index
 using KLU: KLU
