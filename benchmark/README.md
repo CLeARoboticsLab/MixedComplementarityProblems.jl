@@ -115,11 +115,12 @@ julia> data = problem_size_scaling_benchmark();
 julia> problem_size_scaling_summary(data)
 ```
 
-**Current status (RTX 4090, 32 threads, updated 2026-07-30): the CPU is faster than the GPU
+**Current status (RTX 4090, 32 threads, updated 2026-08-03): the CPU is faster than the GPU
 end-to-end on the trajectory game at every tested horizon; the GPU wins end-to-end only on
-large *dense* per-instance systems (≳128-primal QPs, 2–3×) or large batches of them.** Both
-batched backends clear a batch far faster than sequential `PATH` (game: CPU ~60–90×, GPU
-~20–55×). Raw data and analysis scripts are in [`benchmark/results/`](../results/).
+large *dense* per-instance systems (≳128-primal QPs, roughly 3×) or large batches of them.**
+Both batched backends clear a batch far faster than sequential `PATH` (game, across batch
+sizes 64–4096: CPU ~77–177×, GPU ~26–57×). Raw data and analysis scripts are in
+[`benchmark/results/`](../results/).
 
 > **Correction.** An earlier version of this section (and PRs #54/#55) claimed the GPU *beats*
 > the CPU 2.5–2.8× on the game. That number was the GPU/CPU wall-clock *ratio* with the GPU in
@@ -156,5 +157,5 @@ batched backends clear a batch far faster than sequential `PATH` (game: CPU ~60�
 - **QP** (`num_primals=32, num_inequalities=16`): the GPU pulls ahead as the batch grows
   (GPU/CPU ~0.6× at `N=4096`, i.e. GPU ~1.7× faster), while the CPU is faster at small batch
   sizes. Problem-size sweep (32/64/128 primals) is non-monotonic — GPU wins clearly at 128
-  primals (2–3×) but loses at 64 — confounded by the QP generator's solved fraction changing
+  primals (roughly 3×) but loses at 64 — confounded by the QP generator's solved fraction changing
   sharply with `num_primals` (41% → 96% → 100%); not a clean isolated comparison.

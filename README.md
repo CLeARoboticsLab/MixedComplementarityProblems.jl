@@ -225,14 +225,15 @@ The returned `x`, `y`, `s` live on the GPU (as `CuArray`s); bring them back with
 > to add it to your own project (`] add Adapt`).
 
 > **Performance status.** Both batched backends clear a batch far faster than sequential
-> `PATH` (the trajectory game runs ~60–90× faster on the multithreaded CPU, ~20–55× on the
-> GPU). Between the two backends the story is regime-dependent: the GPU wins end-to-end only
-> on large *dense* per-instance systems (e.g. randomly generated QPs with ≳128 primal
-> variables, 2–3×) or large batches of them, while the **CPU is faster on the trajectory
-> game** at all tested horizons. The GPU's batched sparse factorization does become cheaper
-> *per instance* than threaded KLU as the per-instance system grows, but the CPU's active-set
-> skip — it factorizes only the still-active instances each Newton step, whereas cuDSS always
-> processes the whole batch — keeps the CPU ahead end-to-end on the game. See the [benchmarking
+> `PATH` (the trajectory game runs ~77–177× faster on the multithreaded CPU, ~26–57× on the
+> GPU, across batch sizes 64–4096). Between the two backends the story is regime-dependent:
+> the GPU wins end-to-end only on large *dense* per-instance systems (e.g. randomly generated
+> QPs with ≳128 primal variables, roughly 3×) or large batches of them, while the **CPU is
+> faster on the trajectory game** at all tested horizons. The GPU's batched sparse
+> factorization does become cheaper *per instance* than threaded KLU as the per-instance
+> system grows, but the CPU's active-set skip — it factorizes only the still-active instances
+> each Newton step, whereas cuDSS always processes the whole batch — keeps the CPU ahead
+> end-to-end on the game. See the [benchmarking
 > README](https://github.com/CLeARoboticsLab/MixedComplementarityProblems.jl/blob/main/benchmark/README.md)
 > for the full breakdown and numbers.
 
