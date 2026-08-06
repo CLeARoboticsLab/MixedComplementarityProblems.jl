@@ -37,6 +37,8 @@ using FiniteDiff: FiniteDiff
         @test sol.status == :solved
     end
 
+    regularize_linear_solve_options = (:none, :identity, :Tikhonov, :Marquardt)
+
     @testset "BasicCallableConstructor" begin
         mcp = MixedComplementarityProblems.PrimalDualMCP(
             G,
@@ -45,9 +47,19 @@ using FiniteDiff: FiniteDiff
             constrained_dimension = length(b),
             parameter_dimension = size(M, 1),
         )
-        sol = MixedComplementarityProblems.solve(MixedComplementarityProblems.InteriorPoint(), mcp, θ)
 
-        check_solution(sol)
+        for regularize_linear_solve in regularize_linear_solve_options
+            @testset "$(regularize_linear_solve)" begin
+                sol = MixedComplementarityProblems.solve(
+                    MixedComplementarityProblems.InteriorPoint(),
+                    mcp,
+                    θ;
+                    regularize_linear_solve,
+                )
+
+                check_solution(sol)
+            end
+        end
     end
 
     @testset "AlternativeCallableConstructor" begin
@@ -57,9 +69,19 @@ using FiniteDiff: FiniteDiff
             fill(Inf, size(M, 1) + length(b));
             parameter_dimension = size(M, 1),
         )
-        sol = MixedComplementarityProblems.solve(MixedComplementarityProblems.InteriorPoint(), mcp, θ)
 
-        check_solution(sol)
+        for regularize_linear_solve in regularize_linear_solve_options
+            @testset "$(regularize_linear_solve)" begin
+                sol = MixedComplementarityProblems.solve(
+                    MixedComplementarityProblems.InteriorPoint(),
+                    mcp,
+                    θ;
+                    regularize_linear_solve,
+                )
+
+                check_solution(sol)
+            end
+        end
     end
 
     @testset "AutodifferentationTests" begin
